@@ -7,9 +7,10 @@
 </head>
 <body>
 <div id="info">
-	CAVE Simulator. The head and teapot are draggable. <br />
-	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene  <br />
-    IPD: <input type="range" id="ipdSlider" min="2" max="15" step="0.5" value="6.8"> <span id="ipdVal">6.8</span> cm
+    CAVE Simulator. The head and teapot are draggable. <br />
+    "L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene  <br />
+    IPD: <input type="range" id="ipdSlider" min="2" max="15" step="0.5" value="6.8"> <span id="ipdVal">6.8</span> cm <br />
+    <strong>Parallax Mode / Status:</strong> <span id="parallaxInfo" style="color: #00ff88;">Calculating...</span>
 </div>
 
 <!-- Check: https://threejs.org/docs/index.html#manual/en/introduction/Installation 
@@ -84,6 +85,39 @@ class DisplaySurface
     }
 }
 
+function updateParallaxReadout() {
+    if (!scene) return; // Wait until scene is created
+    var teapot = scene.getObjectByName("Teapot");
+    var readoutElem = document.getElementById("parallaxInfo");
+    if (!teapot || !readoutElem) return;
+
+    // Get world position of the teapot
+    var teapotPos = teapot.getWorldPosition(new THREE.Vector3());
+
+    // Front screen normal and origin (Front screen is at z = -150)
+    var frontScreenOrigin = new THREE.Vector3(-150.0, -150.0, -150.0);
+    var screenZ = frontScreenOrigin.z; // -150
+
+    // Compare teapot Z position relative to the screen plane Z
+    var depthDiff = teapotPos.z - screenZ; 
+
+    var statusText = "";
+    var color = "#ffffff";
+
+    if (Math.abs(depthDiff) < 2.0) {
+        statusText = "Zero Parallax (On Screen Plane)";
+        color = "#ffff00"; // Yellow
+    } else if (teapotPos.z > screenZ) {
+        statusText = "Negative Parallax (Pop-out / In front)";
+        color = "#ff4444"; // Red
+    } else {
+        statusText = "Positive Parallax (Behind screen depth)";
+        color = "#00ff88"; // Green
+    }
+
+    readoutElem.innerText = statusText + " (Z-offset: " + depthDiff.toFixed(1) + " cm)";
+    readoutElem.style.color = color;
+}
 
 var renderer, scene, camera;
 var displaySurfaces, displaySurfaceScene, displaySurfaceTargets;
@@ -96,6 +130,9 @@ function addDragControlToObjects()
     var objects = [];
     objects.push(scene.getObjectByName("Teapot"));
     objects.push(eyeScene.getObjectByName("Head"));
+    objects.push(scene.getObjectByName("LeftTorus"));
+    objects.push(scene.getObjectByName("RightCrystal"));
+    objects.push(scene.getObjectByName("FrontCone"));
     
 	//console.log(objects); 
 	
@@ -199,12 +236,39 @@ function createScene()
 {
     scene = new THREE.Scene();
 
-    var geometry = new TeapotGeometry( 40, 15);
+    // 1. Add central teapot object
+    var geometry = new TeapotGeometry( 30, 15);
     var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
     var teapot = new THREE.Mesh(geometry, material);
     teapot.name = "Teapot";
-    teapot.position.z-=70;
+    teapot.position.set(0, 0, -40);
     scene.add( teapot );
+
+    // 2. Add distinct geometric structures to enhance depth cues
+    // Add a glowing green torus (donut ring) on the left
+    var torusGeometry = new THREE.TorusGeometry(20, 7, 16, 100);
+    var torusMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff88, shininess: 100 });
+    var torus = new THREE.Mesh(torusGeometry, torusMaterial);
+    torus.name = "LeftTorus";
+    torus.position.set(-70, 20, -80);
+    torus.rotation.x = Math.PI / 4;
+    scene.add(torus);
+
+    // Add a facetted icosahedron (crystal/gem) further back on the right
+    var icoGeometry = new THREE.IcosahedronGeometry(25, 0);
+    var icoMaterial = new THREE.MeshPhongMaterial({ color: 0x3388ff, flatShading: true });
+    var ico = new THREE.Mesh(icoGeometry, icoMaterial);
+    ico.name = "RightCrystal";
+    ico.position.set(70, -10, -120);
+    scene.add(ico);
+
+    // Add a pointed cone near the front base
+    var coneGeometry = new THREE.ConeGeometry(18, 45, 32);
+    var coneMaterial = new THREE.MeshPhongMaterial({ color: 0xffdd00 });
+    var cone = new THREE.Mesh(coneGeometry, coneMaterial);
+    cone.name = "FrontCone";
+    cone.position.set(0, -45, -10);
+    scene.add(cone);
                 
     createLights(scene);
 }
@@ -330,13 +394,15 @@ function cameraFromViewProj(view, proj)
 	return cam;
 }
 
-// refresh function
 var animate = function () {
     var gl = renderer.getContext();
     // Only call requestAnimationFrame if not running inside an active WebXR session
     if (renderer.xr.isPresenting === false) {
         requestAnimationFrame(animate);
     }
+
+    // Update our creative parallax calculation live
+    updateParallaxReadout();
 
     // 1. render scene objects
 	renderer.setClearColor(0x808080);

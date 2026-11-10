@@ -7,7 +7,7 @@
 </head>
 <body>
 <div id="info">
-    CAVE Simulator. The head and teapot are draggable. <br />
+    CAVE Simulator. The head, teapot, and birds are draggable. <br />
     "L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene  <br />
     IPD: <input type="range" id="ipdSlider" min="2" max="15" step="0.5" value="6.8"> <span id="ipdVal">6.8</span> cm <br />
     <strong>Parallax Mode / Status:</strong> <span id="parallaxInfo" style="color: #00ff88;">Calculating...</span>
@@ -31,6 +31,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DragControls } from 'three/addons/controls/DragControls.js';
 import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { loadBird } from './Bird.js';
 
 class DisplaySurface 
 {
@@ -44,8 +45,6 @@ class DisplaySurface
 
 	viewMatrix(eye)
 	{
-		// to be written by you!
-
 		var vrp = new THREE.Vector3().addVectors(this.origin, this.u.clone().multiplyScalar(0.5)).add(this.v.clone().multiplyScalar(0.5));
 		var normal = new THREE.Vector3().crossVectors(this.u, this.v).normalize();
 		var dist = eye.clone().sub(vrp).dot(normal);
@@ -61,7 +60,6 @@ class DisplaySurface
 	
     projectionMatrix(eye, znear, zfar)
     {
-		// to be written by you!
         var uHat = this.u.clone().normalize();
 		var vHat = this.v.clone().normalize();
 		var wHat = new THREE.Vector3().crossVectors(uHat, vHat).normalize();
@@ -86,19 +84,14 @@ class DisplaySurface
 }
 
 function updateParallaxReadout() {
-    if (!scene) return; // Wait until scene is created
+    if (!scene) return; 
     var teapot = scene.getObjectByName("Teapot");
     var readoutElem = document.getElementById("parallaxInfo");
     if (!teapot || !readoutElem) return;
 
-    // Get world position of the teapot
     var teapotPos = teapot.getWorldPosition(new THREE.Vector3());
-
-    // Front screen normal and origin (Front screen is at z = -150)
     var frontScreenOrigin = new THREE.Vector3(-150.0, -150.0, -150.0);
-    var screenZ = frontScreenOrigin.z; // -150
-
-    // Compare teapot Z position relative to the screen plane Z
+    var screenZ = frontScreenOrigin.z; 
     var depthDiff = teapotPos.z - screenZ; 
 
     var statusText = "";
@@ -106,13 +99,13 @@ function updateParallaxReadout() {
 
     if (Math.abs(depthDiff) < 2.0) {
         statusText = "Zero Parallax (On Screen Plane)";
-        color = "#ffff00"; // Yellow
+        color = "#ffff00"; 
     } else if (teapotPos.z > screenZ) {
         statusText = "Negative Parallax (Pop-out / In front)";
-        color = "#ff4444"; // Red
+        color = "#ff4444"; 
     } else {
         statusText = "Positive Parallax (Behind screen depth)";
-        color = "#00ff88"; // Green
+        color = "#00ff88"; 
     }
 
     readoutElem.innerText = statusText + " (Z-offset: " + depthDiff.toFixed(1) + " cm)";
@@ -125,16 +118,31 @@ var eyeCenter, eyeScene;
 var orbitControl;
 var showScene = true;
 
-function addDragControlToObjects()
+// Shared clock and collection array for multiple animated bird updaters
+var animationClock = new THREE.Clock();
+var birdUpdaters = [];
+
+function setupDragControls()
 {
     var objects = [];
-    objects.push(scene.getObjectByName("Teapot"));
-    objects.push(eyeScene.getObjectByName("Head"));
-    objects.push(scene.getObjectByName("LeftTorus"));
-    objects.push(scene.getObjectByName("RightCrystal"));
-    objects.push(scene.getObjectByName("FrontCone"));
+    var teapot = scene.getObjectByName("Teapot");
+    var head = eyeScene.getObjectByName("Head");
+    var torus = scene.getObjectByName("LeftTorus");
+    var crystal = scene.getObjectByName("RightCrystal");
+    var cone = scene.getObjectByName("FrontCone");
+
+    if (teapot) objects.push(teapot);
+    if (head) objects.push(head);
+    if (torus) objects.push(torus);
+    if (crystal) objects.push(crystal);
+    if (cone) objects.push(cone);
     
-	//console.log(objects); 
+    // Automatically catch all loaded birds inside the scene
+    scene.traverse((child) => {
+        if (child.isGroup && child.name.startsWith("Bird_")) {
+            objects.push(child);
+        }
+    });
 	
     var controls = new DragControls( objects, camera, renderer.domElement );
     controls.addEventListener( 'hoveron', function ( event ) 
@@ -147,11 +155,28 @@ function addDragControlToObjects()
     } );
 	controls.addEventListener( 'dragstart', function ( event ) 
 		{
-            event.object.material.emissive.set( 0xaaaaaa );
+            // Traverse meshes inside grouped objects to highlight them on drag
+            event.object.traverse((child) => {
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => { if(m.emissive) m.emissive.set(0xaaaaaa); });
+                    } else if (child.material.emissive) {
+                        child.material.emissive.set(0xaaaaaa);
+                    }
+                }
+            });
         } );
     controls.addEventListener( 'dragend', function ( event ) 
 		{
-            event.object.material.emissive.set( 0x000000 );
+            event.object.traverse((child) => {
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => { if(m.emissive) m.emissive.set(0x000000); });
+                    } else if (child.material.emissive) {
+                        child.material.emissive.set(0x000000);
+                    }
+                }
+            });
     } );
 }
 
@@ -159,13 +184,11 @@ function createEyeScene()
 {
     var IPD = 6.8; 
     eyeCenter = new THREE.Vector3(50, 20, 50);
-    // eye positions relative to the head
     var eyeL = new THREE.Vector3( - IPD/2, 10, -6);
     var eyeR = new THREE.Vector3( + IPD/2, 10, -6);
     
     eyeScene = new THREE.Scene();
 
-    // add sphere representing head
     var geometry = new THREE.SphereGeometry( 10, 32, 22 );
     var material = new THREE.MeshPhongMaterial( { color: 0xaaaaaa } );
     var head = new THREE.Mesh( geometry, material );
@@ -173,20 +196,19 @@ function createEyeScene()
     head.position.set(eyeCenter.x, eyeCenter.y, eyeCenter.z);
     eyeScene.add(head);
 
-    // add spheres representing L/R eyes
-    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
-    var material = new THREE.MeshPhongMaterial( { color: 0xff0000 } );
-    var sphere = new THREE.Mesh( geometry, material );
-    sphere.name = "EyeL";
-    sphere.position.set(eyeL.x, eyeL.y, eyeL.z);
-    head.add(sphere);
+    var geometryL = new THREE.SphereGeometry( 3, 32, 22 );
+    var materialL = new THREE.MeshPhongMaterial( { color: 0xff0000 } );
+    var sphereL = new THREE.Mesh( geometryL, materialL );
+    sphereL.name = "EyeL";
+    sphereL.position.set(eyeL.x, eyeL.y, eyeL.z);
+    head.add(sphereL);
 	
-    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
-    var material = new THREE.MeshPhongMaterial( { color: 0x0000ff } );
-    var sphere = new THREE.Mesh( geometry, material );
-    sphere.name = "EyeR";
-    sphere.position.set(eyeR.x, eyeR.y, eyeR.z);
-	head.add(sphere);
+    var geometryR = new THREE.SphereGeometry( 3, 32, 22 );
+    var materialR = new THREE.MeshPhongMaterial( { color: 0x0000ff } );
+    var sphereR = new THREE.Mesh( geometryR, materialR );
+    sphereR.name = "EyeR";
+    sphereR.position.set(eyeR.x, eyeR.y, eyeR.z);
+	head.add(sphereR);
     
     createLights(eyeScene);
 }
@@ -195,12 +217,9 @@ function createRenderer()
 {
     renderer = new THREE.WebGLRenderer({preserveDrawingBuffer: true});
     renderer.autoClear = false;
-    //renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.xr.enabled = true; // Enable WebXR support
+    renderer.xr.enabled = true; 
     document.body.appendChild(renderer.domElement);
-
-    // Append the WebXR button to the DOM
     document.body.appendChild(VRButton.createButton(renderer));
 }
 
@@ -226,7 +245,6 @@ function createLights(scn)
     var ambientLight = new THREE.AmbientLight(0x888888, 0.7 * Math.PI);
     scn.add(ambientLight);
 
-    // No distance attenuation: the simulator uses scene units at a large scale.
     var pointLight = new THREE.PointLight(0xffffff, 0.8 * Math.PI, 0, 0);
     pointLight.position.z += 200;
     scn.add(pointLight);
@@ -236,7 +254,6 @@ function createScene()
 {
     scene = new THREE.Scene();
 
-    // 1. Add central teapot object
     var geometry = new TeapotGeometry( 30, 15);
     var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
     var teapot = new THREE.Mesh(geometry, material);
@@ -244,41 +261,35 @@ function createScene()
     teapot.position.set(0, 0, -40);
     scene.add( teapot );
 
-    // 2. Add distinct geometric structures to enhance depth cues
-    // Add a glowing green torus (donut ring) on the left
     var torusGeometry = new THREE.TorusGeometry(20, 7, 16, 100);
     var torusMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff88, shininess: 100 });
     var torus = new THREE.Mesh(torusGeometry, torusMaterial);
     torus.name = "LeftTorus";
     torus.position.set(-70, 20, -80);
     torus.rotation.x = Math.PI / 4;
-    scene.add(torus);
+    //scene.add(torus);
 
-    // Add a facetted icosahedron (crystal/gem) further back on the right
     var icoGeometry = new THREE.IcosahedronGeometry(25, 0);
     var icoMaterial = new THREE.MeshPhongMaterial({ color: 0x3388ff, flatShading: true });
     var ico = new THREE.Mesh(icoGeometry, icoMaterial);
     ico.name = "RightCrystal";
     ico.position.set(70, -10, -120);
-    scene.add(ico);
+    //scene.add(ico);
 
-    // Add a pointed cone near the front base
     var coneGeometry = new THREE.ConeGeometry(18, 45, 32);
     var coneMaterial = new THREE.MeshPhongMaterial({ color: 0xffdd00 });
     var cone = new THREE.Mesh(coneGeometry, coneMaterial);
     cone.name = "FrontCone";
     cone.position.set(0, -45, -10);
-    scene.add(cone);
+    //scene.add(cone);
                 
     createLights(scene);
 }
 
-// create a scene with 3D objects representing the display surfaces
 function createDisplaySurfaceScene()
 {
     displaySurfaceScene = new THREE.Scene();
 
-    // add display surfaces
     for (var [index, displaySurface] of displaySurfaces.entries())
     {
         var origin = displaySurface.origin;
@@ -289,11 +300,11 @@ function createDisplaySurfaceScene()
         var material = new THREE.MeshBasicMaterial( {map: displaySurfaceTargets[index].texture} );
         var cube = new THREE.Mesh( geometry, material );
         cube.name = displaySurface.name;
-        // Add a visual grid helper to the floor surface to enhance depth cues and surface separation
+
         if (displaySurface.name === "Floor") {
             var gridHelper = new THREE.GridHelper(300, 10, 0xffffff, 0x555555);
-            gridHelper.rotation.x = Math.PI / 2; // Align grid with the floor plane
-            gridHelper.position.z = -0.02; // Slightly above the surface to avoid z-fighting
+            gridHelper.rotation.x = Math.PI / 2; 
+            gridHelper.position.z = -0.02; 
             cube.add(gridHelper);
         }
         if (displaySurface.name == "Left")
@@ -322,13 +333,12 @@ function createDisplaySurfaceScene()
 
 function createDisplaySurfaceTargets()
 {
-    const SIZE = 1024;  // texture resolution
+    const SIZE = 1024;  
     displaySurfaceTargets = [];
     
     for (var v of displaySurfaces)       
         displaySurfaceTargets.push(new THREE.WebGLRenderTarget(SIZE, SIZE));
 }
-
 
 function createCamera()
 {
@@ -340,35 +350,29 @@ function createCamera()
 function createDisplaySurfaces()
 {
     displaySurfaces = [];
-    // FRONT SCREEN
     var frontScreen = new DisplaySurface("Front", 
         new THREE.Vector3(-150.0, -150.0, -150.0), 
         new THREE.Vector3(300.0, 0.0,   0.0), 
         new THREE.Vector3(0.0, 300.0,   0.0));
     displaySurfaces.push(frontScreen);
 
-    // LEFT SCREEN
     var leftScreen = new DisplaySurface("Left",
         new THREE.Vector3(-150.0, -150.0, 150.0), 
         new THREE.Vector3(0.0, 0.0,  -300.0), 
         new THREE.Vector3(0.0, 300.0,   0.0));
     displaySurfaces.push(leftScreen);
 	
-	// to be completed by you
-    // RIGHT SCREEN
     var rightScreen = new DisplaySurface("Right",
         new THREE.Vector3(150.0, -150.0, -150.0), 
         new THREE.Vector3(0.0, 0.0,  300.0), 
         new THREE.Vector3(0.0, 300.0,   0.0));
     displaySurfaces.push(rightScreen);
 
-    // FLOOR SCREEN
     var floorScreen = new DisplaySurface("Floor",
         new THREE.Vector3(-150.0, -150.0, -150.0),
         new THREE.Vector3(300.0, 0.0, 0.0), 
         new THREE.Vector3(0.0, 0.0, 300.0));
     displaySurfaces.push(floorScreen);
-	
 }
 
 function getLeftEyePosition()
@@ -396,12 +400,13 @@ function cameraFromViewProj(view, proj)
 
 var animate = function () {
     var gl = renderer.getContext();
-    // Only call requestAnimationFrame if not running inside an active WebXR session
-    if (renderer.xr.isPresenting === false) {
-        requestAnimationFrame(animate);
+    var delta = animationClock.getDelta();
+
+    // Update all loaded birds using the shared frame delta
+    for (let tick of birdUpdaters) {
+        tick(delta);
     }
 
-    // Update our creative parallax calculation live
     updateParallaxReadout();
 
     // 1. render scene objects
@@ -415,96 +420,105 @@ var animate = function () {
     {
         renderer.setRenderTarget(displaySurfaceTargets[index]);
 
-        // Set a distinct background color for the floor to improve visual contrast from walls
         if (displaySurface.name === "Floor") {
-            renderer.setClearColor(0x2a3b4c); // Dark bluish-grey tone for the floor
+            renderer.setClearColor(0x2a3b4c); 
         } else {
-            renderer.setClearColor(0x404040); // Standard dark grey for the walls
+            renderer.setClearColor(0x404040); 
         }
 
         renderer.clear();
 
-		// left eye on RED channel
         gl.colorMask(1, 0, 0, 0); 
-		var eye = getLeftEyePosition();
-		var view = displaySurface.viewMatrix(eye);
-		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
-        var leftCamera = cameraFromViewProj(view, proj);
+		var eyeLPos = getLeftEyePosition();
+		var viewL = displaySurface.viewMatrix(eyeLPos);
+		var projL = displaySurface.projectionMatrix(eyeLPos, 1, 10000);
+        var leftCamera = cameraFromViewProj(viewL, projL);
         renderer.render(scene, leftCamera); 
     
-		// right eye on GREEN, BLUE channels
 		gl.colorMask(0, 1, 1, 0);
-		var eye = getRightEyePosition();
-		var view = displaySurface.viewMatrix(eye);
-		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
-        var rightCamera = cameraFromViewProj(view, proj);
+		var eyeRPos = getRightEyePosition();
+		var viewR = displaySurface.viewMatrix(eyeRPos);
+		var projR = displaySurface.projectionMatrix(eyeRPos, 1, 10000);
+        var rightCamera = cameraFromViewProj(viewR, projR);
         renderer.clearDepth();
         renderer.render(scene, rightCamera); 
 		
         gl.colorMask(1, 1, 1, 1);
     }
-    // restore state
+    
     renderer.setRenderTarget(null);
     renderer.setClearColor(0x000000);
   
-    // 3. render display surfaces as (textured) quads
     renderer.render(displaySurfaceScene, camera);
-	
-	// 4. render eyes
-    renderer.render(eyeScene, camera);
-	
+    renderer.render(eyeScene, camera);	
 };
-
 
 window.addEventListener( 'keydown', function ( event ) 
 {
-        switch ( event.code ) {
-            case 'KeyL': 
-                var eye = getLeftEyePosition();
-                camera.position.set(eye.x, eye.y, eye.z); 
-                break;
-                
-            case 'KeyR': 
-                var eye = getRightEyePosition();
-                camera.position.set(eye.x, eye.y, eye.z); 
-                break;
-                
-            case 'KeyS':
-                showScene = !showScene;
-                break;
-				
-			case 'KeyT':
-				var viewF = displaySurfaces[0].viewMatrix(new THREE.Vector3(50,20,100));
-				var viewL = displaySurfaces[1].viewMatrix(new THREE.Vector3(50,20,100));
-				var viewR = displaySurfaces[2].viewMatrix(new THREE.Vector3(50,20,100));
-				var viewB = displaySurfaces[3].viewMatrix(new THREE.Vector3(50,20,100));
-				console.log("View matrices:");
-				console.log(viewF);
-				console.log(viewL);
-				console.log(viewR);
-				console.log(viewB);
-				break;
-                
-                    
-}
+    switch ( event.code ) {
+        case 'KeyL': 
+            var eye = getLeftEyePosition();
+            camera.position.set(eye.x, eye.y, eye.z); 
+            break;
+            
+        case 'KeyR': 
+            var eye = getRightEyePosition();
+            camera.position.set(eye.x, eye.y, eye.z); 
+            break;
+            
+        case 'KeyS':
+            showScene = !showScene;
+            break;
+            
+        case 'KeyT':
+            var viewF = displaySurfaces[0].viewMatrix(new THREE.Vector3(50,20,100));
+            var viewL = displaySurfaces[1].viewMatrix(new THREE.Vector3(50,20,100));
+            var viewR = displaySurfaces[2].viewMatrix(new THREE.Vector3(50,20,100));
+            var viewB = displaySurfaces[3].viewMatrix(new THREE.Vector3(50,20,100));
+            console.log("View matrices:", viewF, viewL, viewR, viewB);
+            break;
+    }
 });
 
+async function initApp() {
+    createRenderer();  			
+    createDisplaySurfaces();	
+    createDisplaySurfaceTargets(); 
+    createDisplaySurfaceScene();	
+    createEyeScene();	
+    createScene();		
 
+    try {
+        // 1. Load Flamingo (Left side)
+        const flamingo = await loadBird('models/Flamingo.glb', { x: -60, y: 30, z: -70 }, 0.25);
+        scene.add(flamingo.model);
+        birdUpdaters.push(flamingo.tick);
 
-createRenderer();  			// create WebGL renderer
-createDisplaySurfaces();	// Display surfaces
-createDisplaySurfaceTargets(); // Textures for the display surfaces
-createDisplaySurfaceScene();	// 3D objects for the display surfaces
-createEyeScene();	// spheres representing head + eyes
-createScene();		// some objects to test (teapot...)
-createCamera();		// a third-person camera
-window.addEventListener('resize', onWindowResize);
-enableOrbitCamera(camera, renderer);  // basic camera control
-addDragControlToObjects();  // allow some objects to be dragged
+        // 2. Load Stork (Center/Right side)
+        const stork = await loadBird('models/Stork.glb', { x: 0, y: 40, z: -100 }, 0.25);
+        scene.add(stork.model);
+        birdUpdaters.push(stork.tick);
 
-// Use WebXR compatible animation loop instead of standard requestAnimationFrame for VR mode support
-renderer.setAnimationLoop(animate);
-// Interactive IPD adjustment
+        // 3. Load Parrot (Far right side)
+        const parrot = await loadBird('models/Parrot.glb', { x: 60, y: 15, z: -50 }, 0.5);
+        scene.add(parrot.model);
+        birdUpdaters.push(parrot.tick);
+
+        console.log("All birds loaded successfully!");
+    } catch (e) {
+        console.warn("Could not load bird models (check file names and local server directory):", e);
+    }
+
+    createCamera();		
+    window.addEventListener('resize', onWindowResize);
+    enableOrbitCamera(camera, renderer);  
+    setupDragControls();  
+
+    renderer.setAnimationLoop(animate);
+}
+
+initApp();
+
 const ipdSlider = document.getElementById('ipdSlider');
 const ipdVal = document.getElementById('ipdVal');
 
@@ -513,7 +527,6 @@ if (ipdSlider) {
         var newIPD = parseFloat(event.target.value);
         ipdVal.innerText = newIPD;
 
-        // Update eye positions dynamically inside the head object
         var head = eyeScene.getObjectByName("Head");
         if (head) {
             var eyeL = head.getObjectByName("EyeL");
@@ -525,8 +538,6 @@ if (ipdSlider) {
         }
     });
 }
-
-
-		</script>
-    </body>
+</script>
+</body>
 </html>

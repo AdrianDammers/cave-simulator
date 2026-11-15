@@ -494,6 +494,95 @@ function updateParallaxReadout()
     readout.style.color = color;
 }
 
+const XR_SCALE = 0.01;
+const XR_OFFSET = new THREE.Vector3(0, 1.5, -1);
+
+let xrDebugPrinted = false;
+
+function renderXRScene()
+{
+    // 1. Scenes defined in centimeters
+    const scenes = [
+        scene,
+        displaySurfaceScene,
+        eyeScene
+    ];
+
+    // 2. Save their original transformations
+    const originals = scenes.map(scn => ({
+        position: scn.position.clone(),
+        scale: scn.scale.clone()
+    }));
+
+    try
+    {
+        // 3. Convert centimeters to meters
+        for (const scn of scenes)
+        {
+            scn.position.multiplyScalar(XR_SCALE);
+            scn.position.add(XR_OFFSET);
+
+            scn.scale.multiplyScalar(XR_SCALE);
+            scn.updateMatrixWorld(true);
+        }
+
+        // 4. Debug: physical positions in WebXR
+        if (!xrDebugPrinted)
+        {
+            const floor = displaySurfaceScene.getObjectByName("Floor");
+            const front = displaySurfaceScene.getObjectByName("Front");
+            const teapot = scene.getObjectByName("Teapot");
+
+            console.log("=== WEBXR SCALE DEBUG ===");
+            console.log("Expected CAVE size: 3 x 3 x 3 meters");
+
+            console.table([
+                {
+                    Object: "Floor center",
+                    Position: floor.getWorldPosition(
+                        new THREE.Vector3()
+                    ).toArray()
+                },
+                {
+                    Object: "Front center",
+                    Position: front.getWorldPosition(
+                        new THREE.Vector3()
+                    ).toArray()
+                },
+                {
+                    Object: "Teapot",
+                    Position: teapot.getWorldPosition(
+                        new THREE.Vector3()
+                    ).toArray()
+                }
+            ]);
+
+            xrDebugPrinted = true;
+        }
+
+        // 5. Render using the WebXR headset cameras
+        renderer.setRenderTarget(null);
+        renderer.setClearColor(0x303030);
+        renderer.clear();
+
+        if (showScene) {
+            renderer.render(scene, camera);
+        }
+
+        renderer.render(displaySurfaceScene, camera);
+        renderer.render(eyeScene, camera);
+    }
+    finally
+    {
+        // 6. Restore the centimeter-based transformations
+        scenes.forEach((scn, i) => {
+            scn.position.copy(originals[i].position);
+            scn.scale.copy(originals[i].scale);
+            scn.updateMatrixWorld(true);
+        });
+    }
+}
+
 // refresh function
 var animate = function () {
     var gl = renderer.getContext();
@@ -506,6 +595,13 @@ var animate = function () {
     }
 
     updateParallaxReadout();
+
+    // WebXR rendering
+    if (renderer.xr.isPresenting)
+    {
+        renderXRScene();
+        return;
+    }
 
     // 1. render scene objects
 	renderer.setClearColor(0x808080);

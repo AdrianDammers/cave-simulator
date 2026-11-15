@@ -118,10 +118,8 @@ function addDragControlToObjects()
     var objects = [];
     objects.push(scene.getObjectByName("Teapot"));
     objects.push(eyeScene.getObjectByName("Head"));
-    objects.push(scene.getObjectByName("Teapot"));
     objects.push(scene.getObjectByName("Sphere"));
     objects.push(scene.getObjectByName("Cube"));
-    objects.push(eyeScene.getObjectByName("Head"));
         
 	//console.log(objects); 
 	
@@ -347,6 +345,56 @@ function createDisplaySurfaceScene()
     }
     
     createLights(displaySurfaceScene);
+}
+
+function configureXRSurfaceMaterials()
+{
+    // Materials used only during WebXR sessions
+    const xrWallMaterial = new THREE.MeshBasicMaterial({
+        color: 0x8899aa,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
+
+    const xrFloorMaterial = new THREE.MeshBasicMaterial({
+        color: 0x666666,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
+
+    const originalMaterials = new Map();
+
+    renderer.xr.addEventListener("sessionstart", function()
+    {
+        for (const surface of displaySurfaceScene.children)
+        {
+            if (!surface.isMesh) continue;
+
+            originalMaterials.set(surface, surface.material);
+
+            surface.material = surface.name === "Floor"
+                ? xrFloorMaterial
+                : xrWallMaterial;
+        }
+
+        console.log("XR: CAVE surfaces switched to VR materials");
+    });
+
+    renderer.xr.addEventListener("sessionend", function()
+    {
+        for (const [surface, material] of originalMaterials)
+        {
+            surface.material = material;
+        }
+
+        originalMaterials.clear();
+
+        console.log("XR: Original CAVE textures restored");
+    });
 }
 
 function createDisplaySurfaceTargets()
@@ -1144,6 +1192,7 @@ createRenderer();  			// create WebGL renderer
 createDisplaySurfaces();	// Display surfaces
 createDisplaySurfaceTargets(); // Textures for the display surfaces
 createDisplaySurfaceScene();	// 3D objects for the display surfaces
+configureXRSurfaceMaterials();
 createEyeScene();	// spheres representing head + eyes
 createScene();		// some objects to test (teapot...)
 loadBirdModel();

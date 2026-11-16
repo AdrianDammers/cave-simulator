@@ -688,6 +688,8 @@
             }
         }
 
+        const questMode = new URLSearchParams(window.location.search).has("quest");
+
         // refresh function
         var animate = function () {
             var gl = renderer.getContext();
@@ -705,6 +707,15 @@
             if (renderer.xr.isPresenting)
             {
                 renderXRScene();
+                return;
+            }
+
+            if (questMode)
+            {
+                renderer.setRenderTarget(null);
+                renderer.setClearColor(0x303030);
+                renderer.clear();
+                renderer.render(scene, camera);
                 return;
             }
 

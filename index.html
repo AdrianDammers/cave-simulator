@@ -1,1269 +1,1324 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>CAVE simulator</title>
-<link type="text/css" rel="stylesheet" href="main.css">
+    <meta charset="utf-8">
+    <title>CAVE simulator</title>
+    <link type="text/css" rel="stylesheet" href="main.css">
 </head>
 <body>
-<div id="info">
-	CAVE Simulator. The head and teapot are draggable. <br />
-	"L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene  <br />
+    <div id="info">
+        CAVE Simulator. The head and teapot are draggable. <br />
+        "L" See from Left Eye | "R" See from Right Eye | "S" toggle show scene  <br />
 
-    IPD:
-    <input type="range" id="ipdSlider" min="2" max="30" step="0.2" value="6.8"><span id="ipdValue">6.8</span> cm
-    <strong>Teapot parallax (Front wall):</strong>
-    <span id="parallaxInfo">Calculating...</span> <br />
+        IPD:
+        <input type="range" id="ipdSlider" min="2" max="30" step="0.2" value="6.8"><span id="ipdValue">6.8</span> cm
+        <strong>Teapot parallax (Front wall):</strong>
+        <span id="parallaxInfo">Calculating...</span> <br />
 
-    Scene scale:
-    <input type="range" id="scaleSlider" min="0.25" max="2" step="0.05" value="1"> <span id="scaleValue">1.00</span>x <br/>
+        Scene scale:
+        <input type="range" id="scaleSlider" min="0.25" max="2" step="0.05" value="1"> <span id="scaleValue">1.00</span>x <br/>
 
-    Scene position:<br>
-    X: <input type="range" id="sceneX" min="-150" max="150" step="5" value="0"><span id="valueX">0</span> cm
-    Y: <input type="range" id="sceneY" min="-150" max="150" step="5" value="0"><span id="valueY">0</span> cm
-    Z: <input type="range" id="sceneZ" min="-150" max="150" step="5" value="0"><span id="valueZ">0</span> cm
-</div>
+        Scene position:<br>
+        X: <input type="range" id="sceneX" min="-150" max="150" step="5" value="0"><span id="valueX">0</span> cm
+        Y: <input type="range" id="sceneY" min="-150" max="150" step="5" value="0"><span id="valueY">0</span> cm
+        Z: <input type="range" id="sceneZ" min="-150" max="150" step="5" value="0"><span id="valueZ">0</span> cm
+    </div>
 
-<!-- Check: https://threejs.org/docs/index.html#manual/en/introduction/Installation 
-for alternative installations -->
+    <!-- Check: https://threejs.org/docs/index.html#manual/en/introduction/Installation 
+    for alternative installations -->
 
-<script type="importmap">
-{
-    "imports": {
-        "three": "https://unpkg.com/three@0.186.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.186.0/examples/jsm/"
-    }
-}
-</script>
-
-<script type="module">
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { DragControls } from 'three/addons/controls/DragControls.js';
-import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { VRButton } from 'three/addons/webxr/VRButton.js';
-
-class DisplaySurface 
-{
-    constructor(name, origin, u_vector, v_vector) 
-    {
-        this.name = name;
-        this.origin = origin;
-        this.u = u_vector;
-        this.v = v_vector;
-    }
-
-	viewMatrix(eye)
-	{
-        var uHat = this.u.clone().normalize();
-        var vHat = this.v.clone().normalize();
-
-        var nHat = new THREE.Vector3().crossVectors(uHat, vHat).normalize();
-
-        var mat = new THREE.Matrix4();
-
-        mat.set(
-            uHat.x, uHat.y, uHat.z, -uHat.dot(eye),
-            vHat.x, vHat.y, vHat.z, -vHat.dot(eye),
-            nHat.x, nHat.y, nHat.z, -nHat.dot(eye),
-            0,      0,      0,      1
-        );
-
-        return mat;
-	}
-	
-    frustumParameters(eye, znear)
-    {
-        // 1. Orthonormal basis of the display surface
-        const uHat = this.u.clone().normalize();
-        const vHat = this.v.clone().normalize();
-
-        const nHat = new THREE.Vector3().crossVectors(uHat, vHat).normalize();
-
-        // 2. Vector from the eye to the screen origin
-        const a = this.origin.clone().sub(eye);
-
-        // 3. Perpendicular distance to the screen plane
-        const d = -a.dot(nHat);
-
-        // 4. Scale from screen plane to near clipping plane
-        const scale = znear / d;
-
-        // 5. Off-axis frustum boundaries
-        const left   = a.dot(uHat) * scale;
-        const right  = left + this.u.length() * scale;
-        const bottom = a.dot(vHat) * scale;
-        const top    = bottom + this.v.length() * scale;
-
-        return { left, right, bottom, top };
-    }
-
-    projectionMatrix(eye, znear, zfar)
-    {
-        const { left, right, bottom, top } = this.frustumParameters(eye, znear);
-        return new THREE.Matrix4().makePerspective(left, right, top, bottom, znear, zfar);
-    }
-}
-
-
-var renderer, scene, camera;
-var displaySurfaces, displaySurfaceScene, displaySurfaceTargets;
-var eyeCenter, eyeScene; 
-var orbitControl;
-var showScene = true;
-
-function addDragControlToObjects()
-{
-    var objects = [];
-    objects.push(scene.getObjectByName("Teapot"));
-    objects.push(eyeScene.getObjectByName("Head"));
-    objects.push(scene.getObjectByName("Sphere"));
-    objects.push(scene.getObjectByName("Cube"));
-        
-	//console.log(objects); 
-	
-    var controls = new DragControls( objects, camera, renderer.domElement );
-    controls.addEventListener( 'hoveron', function ( event ) 
-		{
-            orbitControl.enabled = false;
-        } );
-    controls.addEventListener( 'hoveroff', function ( event ) 
-	{
-            orbitControl.enabled = true;
-    } );
-	controls.addEventListener( 'dragstart', function ( event ) 
-		{
-            event.object.material.emissive.set( 0xaaaaaa );
-        } );
-    controls.addEventListener( 'dragend', function ( event ) 
-		{
-            event.object.material.emissive.set( 0x000000 );
-    } );
-}
-
-function createEyeScene()
-{
-    var IPD = 6.8; 
-    eyeCenter = new THREE.Vector3(50, 20, 50);
-    // eye positions relative to the head
-    var eyeL = new THREE.Vector3( - IPD/2, 10, -6);
-    var eyeR = new THREE.Vector3( + IPD/2, 10, -6);
-    
-    eyeScene = new THREE.Scene();
-
-    // add sphere representing head
-    var geometry = new THREE.SphereGeometry( 10, 32, 22 );
-    var material = new THREE.MeshPhongMaterial( { color: 0xaaaaaa } );
-    var head = new THREE.Mesh( geometry, material );
-    head.name = "Head";
-    head.position.set(eyeCenter.x, eyeCenter.y, eyeCenter.z);
-    eyeScene.add(head);
-
-    // add spheres representing L/R eyes
-    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
-    var material = new THREE.MeshPhongMaterial( { color: 0xff0000 } );
-    var sphere = new THREE.Mesh( geometry, material );
-    sphere.name = "EyeL";
-    sphere.position.set(eyeL.x, eyeL.y, eyeL.z);
-    head.add(sphere);
-	
-    var geometry = new THREE.SphereGeometry( 3, 32, 22 );
-    var material = new THREE.MeshPhongMaterial( { color: 0x0000ff } );
-    var sphere = new THREE.Mesh( geometry, material );
-    sphere.name = "EyeR";
-    sphere.position.set(eyeR.x, eyeR.y, eyeR.z);
-	head.add(sphere);
-    
-    createLights(eyeScene);
-}
-
-function createRenderer()
-{
-    renderer = new THREE.WebGLRenderer({
-        antialias: true,
-        preserveDrawingBuffer: false
-    });
-
-    renderer.autoClear = false;
-    renderer.setSize(window.innerWidth, window.innerHeight);
-
-    // Enable WebXR
-    renderer.xr.enabled = true;
-
-    // Use floor-level tracking when supported
-    renderer.xr.setReferenceSpaceType('local-floor');
-
-    document.body.appendChild(renderer.domElement);
-
-    // Add the Enter VR button
-    document.body.appendChild(VRButton.createButton(renderer));
-}
-
-function onWindowResize()
-{
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height);
-}
-
-function enableOrbitCamera(cam, renderer)
-{
-    orbitControl = new OrbitControls(cam, renderer.domElement );
-    orbitControl.minDistance = 0;
-    orbitControl.maxDistance = 50000;
-}
-
-function createLights(scn)
-{
-    var ambientLight = new THREE.AmbientLight(0x888888, 0.7 * Math.PI);
-    scn.add(ambientLight);
-
-    // No distance attenuation: the simulator uses scene units at a large scale.
-    var pointLight = new THREE.PointLight(0xffffff, 0.8 * Math.PI, 0, 0);
-    pointLight.position.z += 200;
-    scn.add(pointLight);
-}
-
-function createScene()
-{
-    scene = new THREE.Scene();
-
-    var geometry = new TeapotGeometry( 40, 15);
-    var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
-    var teapot = new THREE.Mesh(geometry, material);
-    teapot.name = "Teapot";
-    teapot.position.z-=70;
-    scene.add( teapot );
-
-    // Sphere: center on the front screen plane (zero parallax)
-    const sphereGeometry = new THREE.SphereGeometry(18, 32, 24);
-    const sphereMaterial = new THREE.MeshPhongMaterial({
-        color: 0xffffff
-    });
-
-    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
-    sphere.name = "Sphere";
-    sphere.position.set(-80, 15, -150);
-
-    scene.add(sphere);
-
-
-    // Cube: behind the front screen (positive parallax)
-    const cubeGeometry = new THREE.BoxGeometry(32, 32, 32);
-    const cubeMaterial = new THREE.MeshPhongMaterial({
-        color: 0xdddddd
-    });
-
-    const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-    cube.name = "Cube";
-    cube.position.set(75, -20, -205);
-    cube.rotation.set(0.3, 0.5, 0);
-
-    scene.add(cube);
-                
-    createLights(scene);
-}
-
-let birdMixer = null;
-const birdClock = new THREE.Clock();
-
-function loadBirdModel()
-{
-    const loader = new GLTFLoader();
-
-    loader.load(
-        'models/Flamingo.glb',
-
-        function(gltf)
+    <script type="importmap">
         {
-            const bird = gltf.scene;
-
-            bird.name = "Bird";
-            bird.position.set(-45, 45, -110);
-            bird.scale.setScalar(0.25);
-
-            scene.add(bird);
-
-            // Play the first animation, if available
-            if (gltf.animations.length > 0)
-            {
-                birdMixer = new THREE.AnimationMixer(bird);
-                birdMixer.clipAction(gltf.animations[0]).play();
-            }
-
-            console.log("Bird loaded successfully!");
-            console.log("Animations:", gltf.animations.length);
-        },
-
-        undefined,
-
-        function(error)
-        {
-            console.error("Error loading bird:", error);
-        }
-    );
-}
-
-// create a scene with 3D objects representing the display surfaces
-function createDisplaySurfaceScene()
-{
-    displaySurfaceScene = new THREE.Scene();
-
-    // add display surfaces
-    for (var [index, displaySurface] of displaySurfaces.entries())
-    {
-        var origin = displaySurface.origin;
-        var u = displaySurface.u;
-        var v = displaySurface.v;
-
-        var geometry = new THREE.BoxGeometry(u.length(), v.length(), 0.01);
-        var material = new THREE.MeshBasicMaterial( {map: displaySurfaceTargets[index].texture} );
-        var cube = new THREE.Mesh( geometry, material );
-        cube.name = displaySurface.name;
-        if (displaySurface.name == "Left")
-            cube.rotation.y = Math.PI / 2;
-
-		if (displaySurface.name == "Right")
-            cube.rotation.y = - Math.PI / 2;
-			
-		if (displaySurface.name == "Floor")
-		{
-            cube.rotation.x =  Math.PI / 2;
-			cube.rotation.z =  Math.PI ;
-		}
-        var uHalf = u.clone().multiplyScalar(0.5);
-		var vHalf = v.clone().multiplyScalar(0.5);
-		var center = new THREE.Vector3().addVectors(origin, uHalf);
-		center.add(vHalf);
-		cube.position.set(center.x, center.y, center.z);
-		
-        displaySurfaceScene.add(cube);
-    }
-    
-    createLights(displaySurfaceScene);
-}
-
-function configureXRSurfaceMaterials()
-{
-    // Materials used only during WebXR sessions
-    const xrWallMaterial = new THREE.MeshBasicMaterial({
-        color: 0x8899aa,
-        transparent: true,
-        opacity: 0.15,
-        side: THREE.DoubleSide,
-        depthWrite: false
-    });
-
-    const xrFloorMaterial = new THREE.MeshBasicMaterial({
-        color: 0x666666,
-        transparent: true,
-        opacity: 0.45,
-        side: THREE.DoubleSide,
-        depthWrite: false
-    });
-
-    const originalMaterials = new Map();
-
-    renderer.xr.addEventListener("sessionstart", function()
-    {
-        for (const surface of displaySurfaceScene.children)
-        {
-            if (!surface.isMesh) continue;
-
-            originalMaterials.set(surface, surface.material);
-
-            surface.material = surface.name === "Floor"
-                ? xrFloorMaterial
-                : xrWallMaterial;
-        }
-
-        console.log("XR: CAVE surfaces switched to VR materials");
-    });
-
-    renderer.xr.addEventListener("sessionend", function()
-    {
-        for (const [surface, material] of originalMaterials)
-        {
-            surface.material = material;
-        }
-
-        originalMaterials.clear();
-
-        console.log("XR: Original CAVE textures restored");
-    });
-}
-
-function createDisplaySurfaceTargets()
-{
-    const SIZE = 1024;  // texture resolution
-    displaySurfaceTargets = [];
-    
-    for (var v of displaySurfaces)       
-        displaySurfaceTargets.push(new THREE.WebGLRenderTarget(SIZE, SIZE));
-}
-
-
-function createCamera()
-{
-    camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
-    camera.position.set( 100, 100, 300 );
-    camera.lookAt( 0, 0, 0 );
-}
-
-function createDisplaySurfaces()
-{
-    displaySurfaces = [];
-    // FRONT SCREEN
-    var frontScreen = new DisplaySurface("Front", 
-        new THREE.Vector3(-150.0, -150.0, -150.0), 
-        new THREE.Vector3(300.0, 0.0,   0.0), 
-        new THREE.Vector3(0.0, 300.0,   0.0));
-    displaySurfaces.push(frontScreen);
-
-    // LEFT SCREEN
-    var leftScreen = new DisplaySurface("Left",
-        new THREE.Vector3(-150.0, -150.0, 150.0), 
-        new THREE.Vector3(0.0, 0.0,  -300.0), 
-        new THREE.Vector3(0.0, 300.0,   0.0));
-    displaySurfaces.push(leftScreen);
-	
-	// to be completed by you
-
-    // RIGHT SCREEN
-    var rightScreen = new DisplaySurface("Right",
-        new THREE.Vector3(150.0, -150.0, -150.0),
-        new THREE.Vector3(0.0, 0.0, 300.0),
-        new THREE.Vector3(0.0, 300.0, 0.0));
-    displaySurfaces.push(rightScreen);
-
-    // FLOOR SCREEN
-    var floorScreen = new DisplaySurface("Floor",
-        new THREE.Vector3(-150.0, -150.0, 150.0),
-        new THREE.Vector3(300.0, 0.0, 0.0),
-        new THREE.Vector3(0.0, 0.0, -300.0));
-    displaySurfaces.push(floorScreen);
-	
-}
-
-function getLeftEyePosition()
-{
-    var eye = eyeScene.getObjectByName("EyeL");
-    return eye.getWorldPosition(new THREE.Vector3());
-}
-
-function getRightEyePosition()
-{
-    var eye = eyeScene.getObjectByName("EyeR");
-    return eye.getWorldPosition(new THREE.Vector3());
-}
-
-function cameraFromViewProj(view, proj)
-{
-    // 1. Clone the original camera
-    const cam = camera.clone();
-    // 2. Convert the view matrix into a camera world matrix
-    const cameraWorldMatrix = view.clone().invert();
-    // 3. Extract position and orientation
-    cam.position.setFromMatrixPosition(cameraWorldMatrix);
-    cam.quaternion.setFromRotationMatrix(cameraWorldMatrix);
-    // 4. Assign the projection matrix and its inverse
-    cam.projectionMatrix.copy(proj);
-    cam.projectionMatrixInverse.copy(proj).invert();
-    // 5. Update the world transformation
-    cam.updateMatrixWorld(true);
-
-    return cam;
-}
-
-function updateParallaxReadout()
-{
-    const readout = document.getElementById("parallaxInfo");
-    const teapot = scene.getObjectByName("Teapot");
-
-    if (!readout || !teapot) return;
-
-    // 1. Get the front display surface
-    const front = displaySurfaces.find(surface => surface.name === "Front");
-    // 2. Current eye positions
-    const eyeL = getLeftEyePosition();
-    const eyeR = getRightEyePosition();
-    // 3. Current teapot world position
-    const teapotPos = teapot.getWorldPosition(new THREE.Vector3());
-
-    // 4. Create stereoscopic cameras
-    const camL = cameraFromViewProj(front.viewMatrix(eyeL), front.projectionMatrix(eyeL, 1, 10000));
-    const camR = cameraFromViewProj(front.viewMatrix(eyeR), front.projectionMatrix(eyeR, 1, 10000));
-
-    // 5. Project the teapot center into NDC
-    const projectedL = teapotPos.clone().project(camL);
-    const projectedR = teapotPos.clone().project(camR);
-
-    // 6. Compute horizontal disparity in centimeters
-    const width = front.u.length();
-
-    const disparity = (projectedR.x - projectedL.x) * width / 2;
-
-    // 7. Signed distance relative to the screen plane
-    const uHat = front.u.clone().normalize();
-    const vHat = front.v.clone().normalize();
-
-    const normal = new THREE.Vector3()
-        .crossVectors(uHat, vHat)
-        .normalize();
-
-    const offset = teapotPos.clone()
-        .sub(front.origin)
-        .dot(normal);
-
-    var status = "";
-    var color = "#ffffff";
-
-    const tolerance = 0.01; // cm
-
-    if (Math.abs(disparity) < tolerance) {
-        status = "ZERO (On screen)";
-        color = "#ffff00";
-    }
-    else if (disparity < 0) {
-        status = "NEGATIVE (In front)";
-        color = "#ff4444";
-    }
-    else {
-        status = "POSITIVE (Behind)";
-        color = "#00ff88";
-    }
-
-    // 9. Update the interface
-    readout.textContent = `${status} | Disparity: ${disparity.toFixed(3)} cm` + ` | Screen offset: ${offset.toFixed(1)} cm`;
-    readout.style.color = color;
-}
-
-const XR_SCALE = 0.01;
-const XR_OFFSET = new THREE.Vector3(0, 1.5, -1);
-
-let xrDebugPrinted = false;
-
-function renderXRScene()
-{
-    // 1. Scenes defined in centimeters
-    const scenes = [
-        scene,
-        displaySurfaceScene,
-        eyeScene
-    ];
-
-    // 2. Save their original transformations
-    const originals = scenes.map(scn => ({
-        position: scn.position.clone(),
-        scale: scn.scale.clone()
-    }));
-
-    try
-    {
-        // 3. Convert centimeters to meters
-        for (const scn of scenes)
-        {
-            scn.position.multiplyScalar(XR_SCALE);
-            scn.position.add(XR_OFFSET);
-
-            scn.scale.multiplyScalar(XR_SCALE);
-            scn.updateMatrixWorld(true);
-        }
-
-        // 4. Debug: physical positions in WebXR
-        if (!xrDebugPrinted)
-        {
-            const floor = displaySurfaceScene.getObjectByName("Floor");
-            const front = displaySurfaceScene.getObjectByName("Front");
-            const teapot = scene.getObjectByName("Teapot");
-
-            console.log("=== WEBXR SCALE DEBUG ===");
-            console.log("Expected CAVE size: 3 x 3 x 3 meters");
-
-            console.table([
-                {
-                    Object: "Floor center",
-                    Position: floor.getWorldPosition(
-                        new THREE.Vector3()
-                    ).toArray()
-                },
-                {
-                    Object: "Front center",
-                    Position: front.getWorldPosition(
-                        new THREE.Vector3()
-                    ).toArray()
-                },
-                {
-                    Object: "Teapot",
-                    Position: teapot.getWorldPosition(
-                        new THREE.Vector3()
-                    ).toArray()
-                }
-            ]);
-
-            xrDebugPrinted = true;
-        }
-
-        // 5. Render using the WebXR headset cameras
-        renderer.setRenderTarget(null);
-        renderer.setClearColor(0x303030);
-        renderer.clear();
-
-        if (showScene) {
-            renderer.render(scene, camera);
-        }
-
-        renderer.render(displaySurfaceScene, camera);
-
-    }
-    finally
-    {
-        // 6. Restore the centimeter-based transformations
-        scenes.forEach((scn, i) => {
-            scn.position.copy(originals[i].position);
-            scn.scale.copy(originals[i].scale);
-            scn.updateMatrixWorld(true);
-        });
-    }
-}
-
-// refresh function
-var animate = function () {
-    var gl = renderer.getContext();
-    //requestAnimationFrame(animate);
-
-    const delta = birdClock.getDelta();
-
-    if (birdMixer) {
-        birdMixer.update(delta);
-    }
-
-    updateParallaxReadout();
-
-    // WebXR rendering
-    if (renderer.xr.isPresenting)
-    {
-        renderXRScene();
-        return;
-    }
-
-    // 1. render scene objects
-	renderer.setClearColor(0x808080);
-    renderer.clear();
-    if (showScene)
-        renderer.render(scene, camera);
-    
-    // 2. render scene objects onto a texture, for each target
-    for (let [index, displaySurface] of displaySurfaces.entries())
-    {
-        renderer.setRenderTarget(displaySurfaceTargets[index]);
-        renderer.setClearColor(0x404040);
-        renderer.clear();
-
-		// left eye on RED channel
-        gl.colorMask(1, 0, 0, 0); 
-		var eye = getLeftEyePosition();
-		var view = displaySurface.viewMatrix(eye);
-		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
-        var leftCamera = cameraFromViewProj(view, proj);
-        renderer.render(scene, leftCamera); 
-    
-		// right eye on GREEN, BLUE channels
-		gl.colorMask(0, 1, 1, 0);
-		var eye = getRightEyePosition();
-		var view = displaySurface.viewMatrix(eye);
-		var proj = displaySurface.projectionMatrix(eye, 1, 10000);
-        var rightCamera = cameraFromViewProj(view, proj);
-        renderer.clearDepth();
-        renderer.render(scene, rightCamera); 
-		
-        gl.colorMask(1, 1, 1, 1);
-    }
-    // restore state
-    renderer.setRenderTarget(null);
-    renderer.setClearColor(0x000000);
-    // 3. render display surfaces as (textured) quads
-    renderer.render(displaySurfaceScene, camera);
-	
-	// 4. render eyes
-    renderer.render(eyeScene, camera);
-	
-};
-
-
-window.addEventListener( 'keydown', function ( event ) 
-{
-        switch ( event.code ) {
-            case 'KeyL': 
-                var eye = getLeftEyePosition();
-                camera.position.set(eye.x, eye.y, eye.z); 
-                break;
-                
-            case 'KeyR': 
-                var eye = getRightEyePosition();
-                camera.position.set(eye.x, eye.y, eye.z); 
-                break;
-                
-            case 'KeyS':
-                showScene = !showScene;
-                break;
-				
-			case 'KeyT':
-                debugViewMatrices();
-                debugProjectionMatrices();
-                debugRenderingCameras();
-                debugStereoProjection();
-				//var viewF = displaySurfaces[0].viewMatrix(new THREE.Vector3(50,20,100));
-				//var viewL = displaySurfaces[1].viewMatrix(new THREE.Vector3(50,20,100));
-				//var viewR = displaySurfaces[2].viewMatrix(new THREE.Vector3(50,20,100));
-				//var viewB = displaySurfaces[3].viewMatrix(new THREE.Vector3(50,20,100));
-				console.log("View matrices:");
-				//console.log(viewF);
-				//console.log(viewL);
-				//console.log(viewR);
-				//console.log(viewB);
-				break;
-                
-                    
-}
-});
-
-// Debug Functions
-function debugViewMatrices()
-{
-    const eye = new THREE.Vector3(50, 20, 100);
-
-    // Expected matrices from the assignment
-    const expected = {
-        Front: [
-            [1, 0, 0, -50],
-            [0, 1, 0, -20],
-            [0, 0, 1, -100],
-            [0, 0, 0, 1]
-        ],
-        Left: [
-            [0, 0, -1, 100],
-            [0, 1, 0, -20],
-            [1, 0, 0, -50],
-            [0, 0, 0, 1]
-        ],
-        Right: [
-            [0, 0, 1, -100],
-            [0, 1, 0, -20],
-            [-1, 0, 0, 50],
-            [0, 0, 0, 1]
-        ]
-    };
-
-    const tolerance = 1e-6;
-
-    for (const surface of displaySurfaces)
-    {
-        if (!expected[surface.name]) continue;
-
-        const matrix = surface.viewMatrix(eye);
-
-        // Three.js stores Matrix4 elements in column-major order.
-        // Convert them to rows for comparison with the assignment.
-        const actual = [];
-
-        for (let i = 0; i < 4; i++)
-        {
-            actual[i] = [];
-
-            for (let j = 0; j < 4; j++)
-            {
-                actual[i][j] = matrix.elements[j * 4 + i];
+            "imports": {
+                "three": "https://unpkg.com/three@0.186.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.186.0/examples/jsm/"
             }
         }
+    </script>
 
-        let maxError = 0;
+    <script type="module">
 
-        for (let i = 0; i < 4; i++)
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { DragControls } from 'three/addons/controls/DragControls.js';
+        import { TeapotGeometry } from 'three/addons/geometries/TeapotGeometry.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+        class DisplaySurface 
         {
-            for (let j = 0; j < 4; j++)
+            constructor(name, origin, u_vector, v_vector) 
             {
-                const error = Math.abs(
-                    actual[i][j] - expected[surface.name][i][j]
+                this.name = name;
+                this.origin = origin;
+                this.u = u_vector;
+                this.v = v_vector;
+            }
+
+            /*
+                Q1: In this exercise, we ask you to write a function that, given a display surface and the (x,y,z) coordinates 
+                of the eye (both expressed w.r.t. the chosen coordinate system), returns the 4x4 viewing matrix to be 
+                used to render a scene onto the display surface from the given eye position. 
+                
+                For testing it's functionality there is a function, debugViewMatrices, that checks the view matrices
+                obtained by this method and compares it with the matrices provided in the assignment statement
+            */
+            viewMatrix(eye)
+            {
+                var uHat = this.u.clone().normalize();
+                var vHat = this.v.clone().normalize();
+
+                var nHat = new THREE.Vector3().crossVectors(uHat, vHat).normalize();
+
+                var mat = new THREE.Matrix4();
+
+                mat.set(
+                    uHat.x, uHat.y, uHat.z, -uHat.dot(eye),
+                    vHat.x, vHat.y, vHat.z, -vHat.dot(eye),
+                    nHat.x, nHat.y, nHat.z, -nHat.dot(eye),
+                    0,      0,      0,      1
                 );
 
-                maxError = Math.max(maxError, error);
+                return mat;
+            }
+            
+            frustumParameters(eye, znear)
+            {
+                // Orthonormal basis of the display surface
+                const uHat = this.u.clone().normalize();
+                const vHat = this.v.clone().normalize();
+
+                const nHat = new THREE.Vector3().crossVectors(uHat, vHat).normalize();
+
+                // Vector from the eye to the screen origin
+                const a = this.origin.clone().sub(eye);
+
+                // Perpendicular distance to the screen plane
+                const d = -a.dot(nHat);
+
+                // Scale from screen plane to near clipping plane
+                const scale = znear / d;
+
+                // Off-axis frustum boundaries
+                const left   = a.dot(uHat) * scale;
+                const right  = left + this.u.length() * scale;
+                const bottom = a.dot(vHat) * scale;
+                const top    = bottom + this.v.length() * scale;
+
+                return { left, right, bottom, top };
+            }
+
+            /*
+                Q2: Write a JS function that, given a display surface, the (x,y,z) coordinates of the eye, and znear, zfar 
+                clipping planes, returns the 4x4 projection matrix to be used to draw a scene onto the display surface 
+                from the given eye position.  
+                
+                For testing it's functionality there is a function, debugProjectionMatrices, that checks the projection matrices
+                obtained by this method and compares it with the matrices provided in the assignment statement
+            */
+            projectionMatrix(eye, znear, zfar)
+            {
+                const { left, right, bottom, top } = this.frustumParameters(eye, znear);
+                return new THREE.Matrix4().makePerspective(left, right, top, bottom, znear, zfar);
             }
         }
 
-        const passed = maxError < tolerance;
 
-        console.log(`\n=== ${surface.name} VIEW MATRIX ===`);
+        var renderer, scene, camera;
+        var displaySurfaces, displaySurfaceScene, displaySurfaceTargets;
+        var eyeCenter, eyeScene; 
+        var orbitControl;
+        var showScene = true;
 
-        console.table(actual.map((row, i) => ({
-            Row: i,
-            C0: row[0],
-            C1: row[1],
-            C2: row[2],
-            C3: row[3]
-        })));
+        /*
+            Q3: Implement a CAVE simulator with four display surfaces (front, left, right and floor),
+            showing the positions of both eyes and projecting the 3D scene onto each surface.
 
-        console.log(
-            `${passed ? "PASS" : "FAIL"} | Maximum error: ${maxError}`
-        );
+            The stereoscopic projections are generated using multiple rendering passes and the view and 
+            projection matrices implemented in Q1 and Q2. Each surface has its own render target, 
+            combining the left-eye view in red and the right-eye view in cyan.
 
-        console.assert(
-            passed,
-            `${surface.name} view matrix differs from expected result!`
-        );
-    }
-}
+            The simulator also supports dragging the head and scene objects, changing the inter-pupillary 
+            distance (IPD), and translating and scaling the entire scene.
 
-function debugProjectionMatrices()
-{
-    const M0 = [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, -1.002, -2.002],
-        [0, 0, -1, 0]
-    ];
+            A real-time parallax indicator shows the disparity and depth of the teapot relative to the front 
+            display surface.
 
-    const depthRow = [0, 0, -1.002, -0.2002];
-    const lastRow = [0, 0, -1, 0];
+            For testing its functionality, debugRenderingCameras checks the integration of the view and projection 
+            matrices with Three.js cameras, while debugStereoProjection compares the computed stereoscopic disparities 
+            with their theoretical values.
+        */
 
-    // Expected results from assignment, page 4
-    const tests = [
+        function addDragControlToObjects()
         {
-            name: "TEST 1 - Centered eye",
-            eye: new THREE.Vector3(0, 0, 0),
-            near: 1,
-            far: 1000,
-            expected: {
-                Front: { bounds: [-1, 1, -1, 1], matrix: M0 },
-                Left:  { bounds: [-1, 1, -1, 1], matrix: M0 },
-                Right: { bounds: [-1, 1, -1, 1], matrix: M0 },
-                Floor: { bounds: [-1, 1, -1, 1], matrix: M0 }
-            }
-        },
+            var objects = [];
+            objects.push(scene.getObjectByName("Teapot"));
+            objects.push(eyeScene.getObjectByName("Head"));
+            objects.push(scene.getObjectByName("Sphere"));
+            objects.push(scene.getObjectByName("Cube"));
+                
+            //console.log(objects); 
+            
+            var controls = new DragControls( objects, camera, renderer.domElement );
+            controls.addEventListener( 'hoveron', function ( event ) 
+                {
+                    orbitControl.enabled = false;
+                } );
+            controls.addEventListener( 'hoveroff', function ( event ) 
+            {
+                    orbitControl.enabled = true;
+            } );
+            controls.addEventListener( 'dragstart', function ( event ) 
+                {
+                    event.object.material.emissive.set( 0xaaaaaa );
+                } );
+            controls.addEventListener( 'dragend', function ( event ) 
+                {
+                    event.object.material.emissive.set( 0x000000 );
+            } );
+        }
+
+        function createEyeScene()
         {
-            name: "TEST 2 - Off-axis eye",
-            eye: new THREE.Vector3(50, 20, 100),
-            near: 0.1,
-            far: 100,
-            expected: {
-                Front: {
-                    bounds: [-0.08, 0.04, -0.068, 0.052],
-                    matrix: [
-                        [1.66667, 0, -0.333333, 0],
-                        [0, 1.66667, -0.133333, 0],
-                        depthRow,
-                        lastRow
-                    ]
+            var IPD = 6.8; 
+            eyeCenter = new THREE.Vector3(50, 20, 50);
+            // eye positions relative to the head
+            var eyeL = new THREE.Vector3( - IPD/2, 10, -6);
+            var eyeR = new THREE.Vector3( + IPD/2, 10, -6);
+            
+            eyeScene = new THREE.Scene();
+
+            // add sphere representing head
+            var geometry = new THREE.SphereGeometry( 10, 32, 22 );
+            var material = new THREE.MeshPhongMaterial( { color: 0xaaaaaa } );
+            var head = new THREE.Mesh( geometry, material );
+            head.name = "Head";
+            head.position.set(eyeCenter.x, eyeCenter.y, eyeCenter.z);
+            eyeScene.add(head);
+
+            // add spheres representing L/R eyes
+            var geometry = new THREE.SphereGeometry( 3, 32, 22 );
+            var material = new THREE.MeshPhongMaterial( { color: 0xff0000 } );
+            var sphere = new THREE.Mesh( geometry, material );
+            sphere.name = "EyeL";
+            sphere.position.set(eyeL.x, eyeL.y, eyeL.z);
+            head.add(sphere);
+            
+            var geometry = new THREE.SphereGeometry( 3, 32, 22 );
+            var material = new THREE.MeshPhongMaterial( { color: 0x0000ff } );
+            var sphere = new THREE.Mesh( geometry, material );
+            sphere.name = "EyeR";
+            sphere.position.set(eyeR.x, eyeR.y, eyeR.z);
+            head.add(sphere);
+            
+            createLights(eyeScene);
+        }
+
+        function createRenderer()
+        {
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                preserveDrawingBuffer: false
+            });
+
+            renderer.autoClear = false;
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            // Enable WebXR
+            renderer.xr.enabled = true;
+
+            // Use floor-level tracking when supported
+            renderer.xr.setReferenceSpaceType('local-floor');
+
+            document.body.appendChild(renderer.domElement);
+
+            // Add the Enter VR button
+            document.body.appendChild(VRButton.createButton(renderer));
+        }
+
+        function onWindowResize()
+        {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+
+        function enableOrbitCamera(cam, renderer)
+        {
+            orbitControl = new OrbitControls(cam, renderer.domElement );
+            orbitControl.minDistance = 0;
+            orbitControl.maxDistance = 50000;
+        }
+
+        function createLights(scn)
+        {
+            var ambientLight = new THREE.AmbientLight(0x888888, 0.7 * Math.PI);
+            scn.add(ambientLight);
+
+            // No distance attenuation: the simulator uses scene units at a large scale.
+            var pointLight = new THREE.PointLight(0xffffff, 0.8 * Math.PI, 0, 0);
+            pointLight.position.z += 200;
+            scn.add(pointLight);
+        }
+
+        function createScene()
+        {
+            scene = new THREE.Scene();
+
+            var geometry = new TeapotGeometry( 40, 15);
+            var material = new THREE.MeshPhongMaterial( { color: 0xffffff } );
+            var teapot = new THREE.Mesh(geometry, material);
+            teapot.name = "Teapot";
+            teapot.position.z-=70;
+            scene.add( teapot );
+
+            // Sphere: center on the front screen plane (zero parallax)
+            const sphereGeometry = new THREE.SphereGeometry(18, 32, 24);
+            const sphereMaterial = new THREE.MeshPhongMaterial({
+                color: 0xffffff
+            });
+
+            const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            sphere.name = "Sphere";
+            sphere.position.set(-80, 15, -150);
+
+            scene.add(sphere);
+
+
+            // Cube: behind the front screen (positive parallax)
+            const cubeGeometry = new THREE.BoxGeometry(32, 32, 32);
+            const cubeMaterial = new THREE.MeshPhongMaterial({
+                color: 0xdddddd
+            });
+
+            const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+            cube.name = "Cube";
+            cube.position.set(75, -20, -205);
+            cube.rotation.set(0.3, 0.5, 0);
+
+            scene.add(cube);
+                        
+            createLights(scene);
+        }
+
+        let birdMixer = null;
+        const birdClock = new THREE.Clock();
+
+        function loadBirdModel()
+        {
+            const loader = new GLTFLoader();
+
+            loader.load(
+                'models/Flamingo.glb',
+
+                function(gltf)
+                {
+                    const bird = gltf.scene;
+
+                    bird.name = "Bird";
+                    bird.position.set(-45, 45, -110);
+                    bird.scale.setScalar(0.25);
+
+                    scene.add(bird);
+
+                    // Play the first animation, if available
+                    if (gltf.animations.length > 0)
+                    {
+                        birdMixer = new THREE.AnimationMixer(bird);
+                        birdMixer.clipAction(gltf.animations[0]).play();
+                    }
+
+                    console.log("Bird loaded successfully!");
+                    console.log("Animations:", gltf.animations.length);
                 },
-                Left: {
-                    bounds: [-0.025, 0.125, -0.085, 0.065],
-                    matrix: [
-                        [1.33333, 0, 0.666667, 0],
-                        [0, 1.33333, -0.133333, 0],
-                        depthRow,
-                        lastRow
-                    ]
-                },
-                Right: {
-                    bounds: [-0.25, 0.05, -0.17, 0.13],
-                    matrix: [
-                        [0.666667, 0, -0.666667, 0],
-                        [0, 0.666667, -0.133333, 0],
-                        depthRow,
-                        lastRow
-                    ]
+
+                undefined,
+
+                function(error)
+                {
+                    console.error("Error loading bird:", error);
                 }
-            }
-        }
-    ];
-
-    const tolerance = 1e-5;
-
-    for (const test of tests)
-    {
-        console.group(test.name);
-
-        for (const surface of displaySurfaces)
-        {
-            const expected = test.expected[surface.name];
-            if (!expected) continue;
-
-            // Calculate actual frustum parameters
-            const frustum = surface.frustumParameters(
-                test.eye, test.near
             );
+        }
 
-            const actualBounds = [
-                frustum.left,
-                frustum.right,
-                frustum.bottom,
-                frustum.top
+        // create a scene with 3D objects representing the display surfaces
+        function createDisplaySurfaceScene()
+        {
+            displaySurfaceScene = new THREE.Scene();
+
+            // add display surfaces
+            for (var [index, displaySurface] of displaySurfaces.entries())
+            {
+                var origin = displaySurface.origin;
+                var u = displaySurface.u;
+                var v = displaySurface.v;
+
+                var geometry = new THREE.BoxGeometry(u.length(), v.length(), 0.01);
+                var material = new THREE.MeshBasicMaterial( {map: displaySurfaceTargets[index].texture} );
+                var cube = new THREE.Mesh( geometry, material );
+                cube.name = displaySurface.name;
+                if (displaySurface.name == "Left")
+                    cube.rotation.y = Math.PI / 2;
+
+                if (displaySurface.name == "Right")
+                    cube.rotation.y = - Math.PI / 2;
+                    
+                if (displaySurface.name == "Floor")
+                {
+                    cube.rotation.x =  Math.PI / 2;
+                    cube.rotation.z =  Math.PI ;
+                }
+                var uHalf = u.clone().multiplyScalar(0.5);
+                var vHalf = v.clone().multiplyScalar(0.5);
+                var center = new THREE.Vector3().addVectors(origin, uHalf);
+                center.add(vHalf);
+                cube.position.set(center.x, center.y, center.z);
+                
+                displaySurfaceScene.add(cube);
+            }
+            
+            createLights(displaySurfaceScene);
+        }
+
+        function configureXRSurfaceMaterials()
+        {
+            // Materials used only during WebXR sessions
+            const xrWallMaterial = new THREE.MeshBasicMaterial({
+                color: 0x8899aa,
+                transparent: true,
+                opacity: 0.15,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+
+            const xrFloorMaterial = new THREE.MeshBasicMaterial({
+                color: 0x666666,
+                transparent: true,
+                opacity: 0.45,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+
+            const originalMaterials = new Map();
+
+            renderer.xr.addEventListener("sessionstart", function()
+            {
+                for (const surface of displaySurfaceScene.children)
+                {
+                    if (!surface.isMesh) continue;
+
+                    originalMaterials.set(surface, surface.material);
+
+                    surface.material = surface.name === "Floor"
+                        ? xrFloorMaterial
+                        : xrWallMaterial;
+                }
+
+                console.log("XR: CAVE surfaces switched to VR materials");
+            });
+
+            renderer.xr.addEventListener("sessionend", function()
+            {
+                for (const [surface, material] of originalMaterials)
+                {
+                    surface.material = material;
+                }
+
+                originalMaterials.clear();
+
+                console.log("XR: Original CAVE textures restored");
+            });
+        }
+
+        function createDisplaySurfaceTargets()
+        {
+            const SIZE = 1024;  // texture resolution
+            displaySurfaceTargets = [];
+            
+            for (var v of displaySurfaces)       
+                displaySurfaceTargets.push(new THREE.WebGLRenderTarget(SIZE, SIZE));
+        }
+
+
+        function createCamera()
+        {
+            camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 10000 );
+            camera.position.set( 100, 100, 300 );
+            camera.lookAt( 0, 0, 0 );
+        }
+
+        function createDisplaySurfaces()
+        {
+            displaySurfaces = [];
+            // FRONT SCREEN
+            var frontScreen = new DisplaySurface("Front", 
+                new THREE.Vector3(-150.0, -150.0, -150.0), 
+                new THREE.Vector3(300.0, 0.0,   0.0), 
+                new THREE.Vector3(0.0, 300.0,   0.0));
+            displaySurfaces.push(frontScreen);
+
+            // LEFT SCREEN
+            var leftScreen = new DisplaySurface("Left",
+                new THREE.Vector3(-150.0, -150.0, 150.0), 
+                new THREE.Vector3(0.0, 0.0,  -300.0), 
+                new THREE.Vector3(0.0, 300.0,   0.0));
+            displaySurfaces.push(leftScreen);
+            
+            // to be completed by you
+
+            // RIGHT SCREEN
+            var rightScreen = new DisplaySurface("Right",
+                new THREE.Vector3(150.0, -150.0, -150.0),
+                new THREE.Vector3(0.0, 0.0, 300.0),
+                new THREE.Vector3(0.0, 300.0, 0.0));
+            displaySurfaces.push(rightScreen);
+
+            // FLOOR SCREEN
+            var floorScreen = new DisplaySurface("Floor",
+                new THREE.Vector3(-150.0, -150.0, 150.0),
+                new THREE.Vector3(300.0, 0.0, 0.0),
+                new THREE.Vector3(0.0, 0.0, -300.0));
+            displaySurfaces.push(floorScreen);
+            
+        }
+
+        function getLeftEyePosition()
+        {
+            var eye = eyeScene.getObjectByName("EyeL");
+            return eye.getWorldPosition(new THREE.Vector3());
+        }
+
+        function getRightEyePosition()
+        {
+            var eye = eyeScene.getObjectByName("EyeR");
+            return eye.getWorldPosition(new THREE.Vector3());
+        }
+
+        function cameraFromViewProj(view, proj)
+        {
+            // Clone the original camera
+            const cam = camera.clone();
+            // Convert the view matrix into a camera world matrix
+            const cameraWorldMatrix = view.clone().invert();
+            // Extract position and orientation
+            cam.position.setFromMatrixPosition(cameraWorldMatrix);
+            cam.quaternion.setFromRotationMatrix(cameraWorldMatrix);
+            // Assign the projection matrix and its inverse
+            cam.projectionMatrix.copy(proj);
+            cam.projectionMatrixInverse.copy(proj).invert();
+            // Update the world transformation
+            cam.updateMatrixWorld(true);
+
+            return cam;
+        }
+
+        function updateParallaxReadout()
+        {
+            const readout = document.getElementById("parallaxInfo");
+            const teapot = scene.getObjectByName("Teapot");
+
+            if (!readout || !teapot) return;
+
+            // Get the front display surface
+            const front = displaySurfaces.find(surface => surface.name === "Front");
+            // Current eye positions
+            const eyeL = getLeftEyePosition();
+            const eyeR = getRightEyePosition();
+            // Current teapot world position
+            const teapotPos = teapot.getWorldPosition(new THREE.Vector3());
+
+            // Create stereoscopic cameras
+            const camL = cameraFromViewProj(front.viewMatrix(eyeL), front.projectionMatrix(eyeL, 1, 10000));
+            const camR = cameraFromViewProj(front.viewMatrix(eyeR), front.projectionMatrix(eyeR, 1, 10000));
+
+            // Project the teapot center into NDC
+            const projectedL = teapotPos.clone().project(camL);
+            const projectedR = teapotPos.clone().project(camR);
+
+            // Compute horizontal disparity in centimeters
+            const width = front.u.length();
+
+            const disparity = (projectedR.x - projectedL.x) * width / 2;
+
+            // Signed distance relative to the screen plane
+            const uHat = front.u.clone().normalize();
+            const vHat = front.v.clone().normalize();
+
+            const normal = new THREE.Vector3()
+                .crossVectors(uHat, vHat)
+                .normalize();
+
+            const offset = teapotPos.clone()
+                .sub(front.origin)
+                .dot(normal);
+
+            var status = "";
+            var color = "#ffffff";
+
+            const tolerance = 0.01; // cm
+
+            if (Math.abs(disparity) < tolerance) {
+                status = "ZERO (On screen)";
+                color = "#ffff00";
+            }
+            else if (disparity < 0) {
+                status = "NEGATIVE (In front)";
+                color = "#ff4444";
+            }
+            else {
+                status = "POSITIVE (Behind)";
+                color = "#00ff88";
+            }
+
+            // Update the interface
+            readout.textContent = `${status} | Disparity: ${disparity.toFixed(3)} cm` + ` | Screen offset: ${offset.toFixed(1)} cm`;
+            readout.style.color = color;
+        }
+
+        const XR_SCALE = 0.01;
+        const XR_OFFSET = new THREE.Vector3(0, 1.5, -1);
+
+        let xrDebugPrinted = false;
+
+        /*
+            Q4: Add WebXR support to the CAVE simulator, allowing users to explore
+            the CAVE and its virtual objects through a VR headset.
+
+            WebXR is enabled in createRenderer(), using a local-floor reference
+            space and VRButton to enter and exit immersive mode.
+
+            In VR mode, renderXRScene() converts the scene coordinates from
+            centimeters to meters and adjusts the position of the CAVE so that
+            its floor is at ground level. The original transformations are
+            restored after rendering to preserve the desktop simulator.
+
+            The configureXRSurfaceMaterials() function replaces the anaglyph
+            textures with semi-transparent materials during VR sessions,
+            allowing the user to explore the CAVE and its objects without
+            duplicated projections. The original materials are restored
+            when leaving VR.
+
+            For testing its functionality, the WEBXR SCALE DEBUG verifies
+            the positions of the CAVE surfaces and objects in meters.
+        */
+        
+        function renderXRScene()
+        {
+            // Scenes defined in centimeters
+            const scenes = [
+                scene,
+                displaySurfaceScene,
+                eyeScene
             ];
 
-            const boundsError = Math.max(
-                ...actualBounds.map((value, i) =>
-                    Math.abs(value - expected.bounds[i])
-                )
-            );
+            // Save their original transformations
+            const originals = scenes.map(scn => ({
+                position: scn.position.clone(),
+                scale: scn.scale.clone()
+            }));
 
-            // Calculate actual projection matrix
-            const matrix = surface.projectionMatrix(
-                test.eye, test.near, test.far
-            );
-
-            // Convert Three.js column-major storage to rows
-            const actualMatrix = [];
-
-            for (let row = 0; row < 4; row++)
+            try
             {
-                actualMatrix[row] = [];
-
-                for (let col = 0; col < 4; col++)
+                // Convert centimeters to meters
+                for (const scn of scenes)
                 {
-                    actualMatrix[row][col] =
-                        matrix.elements[col * 4 + row];
+                    scn.position.multiplyScalar(XR_SCALE);
+                    scn.position.add(XR_OFFSET);
+
+                    scn.scale.multiplyScalar(XR_SCALE);
+                    scn.updateMatrixWorld(true);
                 }
+
+                if (!xrDebugPrinted)
+                {
+                    const floor = displaySurfaceScene.getObjectByName("Floor");
+                    const front = displaySurfaceScene.getObjectByName("Front");
+                    const teapot = scene.getObjectByName("Teapot");
+
+                    console.log("=== WEBXR SCALE DEBUG ===");
+                    console.log("Expected CAVE size: 3 x 3 x 3 meters");
+
+                    console.table([
+                        {
+                            Object: "Floor center",
+                            Position: floor.getWorldPosition(
+                                new THREE.Vector3()
+                            ).toArray()
+                        },
+                        {
+                            Object: "Front center",
+                            Position: front.getWorldPosition(
+                                new THREE.Vector3()
+                            ).toArray()
+                        },
+                        {
+                            Object: "Teapot",
+                            Position: teapot.getWorldPosition(
+                                new THREE.Vector3()
+                            ).toArray()
+                        }
+                    ]);
+
+                    xrDebugPrinted = true;
+                }
+
+                // Render using the WebXR headset cameras
+                renderer.setRenderTarget(null);
+                renderer.setClearColor(0x303030);
+                renderer.clear();
+
+                if (showScene) {
+                    renderer.render(scene, camera);
+                }
+
+                renderer.render(displaySurfaceScene, camera);
+
+            }
+            finally
+            {
+                // Restore the centimeter-based transformations
+                scenes.forEach((scn, i) => {
+                    scn.position.copy(originals[i].position);
+                    scn.scale.copy(originals[i].scale);
+                    scn.updateMatrixWorld(true);
+                });
+            }
+        }
+
+        // refresh function
+        var animate = function () {
+            var gl = renderer.getContext();
+            //requestAnimationFrame(animate);
+
+            const delta = birdClock.getDelta();
+
+            if (birdMixer) {
+                birdMixer.update(delta);
             }
 
-            let matrixError = 0;
+            updateParallaxReadout();
 
-            for (let row = 0; row < 4; row++)
+            // WebXR rendering
+            if (renderer.xr.isPresenting)
             {
-                for (let col = 0; col < 4; col++)
+                renderXRScene();
+                return;
+            }
+
+            // render scene objects
+            renderer.setClearColor(0x808080);
+            renderer.clear();
+            if (showScene)
+                renderer.render(scene, camera);
+            
+            // render scene objects onto a texture, for each target
+            for (let [index, displaySurface] of displaySurfaces.entries())
+            {
+                renderer.setRenderTarget(displaySurfaceTargets[index]);
+                renderer.setClearColor(0x404040);
+                renderer.clear();
+
+                // left eye on RED channel
+                gl.colorMask(1, 0, 0, 0); 
+                var eye = getLeftEyePosition();
+                var view = displaySurface.viewMatrix(eye);
+                var proj = displaySurface.projectionMatrix(eye, 1, 10000);
+                var leftCamera = cameraFromViewProj(view, proj);
+                renderer.render(scene, leftCamera); 
+            
+                // right eye on GREEN, BLUE channels
+                gl.colorMask(0, 1, 1, 0);
+                var eye = getRightEyePosition();
+                var view = displaySurface.viewMatrix(eye);
+                var proj = displaySurface.projectionMatrix(eye, 1, 10000);
+                var rightCamera = cameraFromViewProj(view, proj);
+                renderer.clearDepth();
+                renderer.render(scene, rightCamera); 
+                
+                gl.colorMask(1, 1, 1, 1);
+            }
+            // restore state
+            renderer.setRenderTarget(null);
+            renderer.setClearColor(0x000000);
+            // render display surfaces as (textured) quads
+            renderer.render(displaySurfaceScene, camera);
+            
+            // render eyes
+            renderer.render(eyeScene, camera);
+            
+        };
+
+
+        window.addEventListener( 'keydown', function ( event ) 
+        {
+                switch ( event.code ) {
+                    case 'KeyL': 
+                        var eye = getLeftEyePosition();
+                        camera.position.set(eye.x, eye.y, eye.z); 
+                        break;
+                        
+                    case 'KeyR': 
+                        var eye = getRightEyePosition();
+                        camera.position.set(eye.x, eye.y, eye.z); 
+                        break;
+                        
+                    case 'KeyS':
+                        showScene = !showScene;
+                        break;
+                        
+                    case 'KeyT':
+                        debugViewMatrices();
+                        debugProjectionMatrices();
+                        debugRenderingCameras();
+                        debugStereoProjection();
+                        //var viewF = displaySurfaces[0].viewMatrix(new THREE.Vector3(50,20,100));
+                        //var viewL = displaySurfaces[1].viewMatrix(new THREE.Vector3(50,20,100));
+                        //var viewR = displaySurfaces[2].viewMatrix(new THREE.Vector3(50,20,100));
+                        //var viewB = displaySurfaces[3].viewMatrix(new THREE.Vector3(50,20,100));
+                        console.log("View matrices:");
+                        //console.log(viewF);
+                        //console.log(viewL);
+                        //console.log(viewR);
+                        //console.log(viewB);
+                        break;
+                        
+                            
+        }
+        });
+
+        // Debug Functions
+        function debugViewMatrices()
+        {
+            const eye = new THREE.Vector3(50, 20, 100);
+
+            // Expected matrices from the assignment
+            const expected = {
+                Front: [
+                    [1, 0, 0, -50],
+                    [0, 1, 0, -20],
+                    [0, 0, 1, -100],
+                    [0, 0, 0, 1]
+                ],
+                Left: [
+                    [0, 0, -1, 100],
+                    [0, 1, 0, -20],
+                    [1, 0, 0, -50],
+                    [0, 0, 0, 1]
+                ],
+                Right: [
+                    [0, 0, 1, -100],
+                    [0, 1, 0, -20],
+                    [-1, 0, 0, 50],
+                    [0, 0, 0, 1]
+                ]
+            };
+
+            const tolerance = 1e-6;
+
+            for (const surface of displaySurfaces)
+            {
+                if (!expected[surface.name]) continue;
+
+                const matrix = surface.viewMatrix(eye);
+
+                // Three.js stores Matrix4 elements in column-major order.
+                // Convert them to rows for comparison with the assignment.
+                const actual = [];
+
+                for (let i = 0; i < 4; i++)
                 {
-                    matrixError = Math.max(
-                        matrixError,
-                        Math.abs(
-                            actualMatrix[row][col] -
-                            expected.matrix[row][col]
+                    actual[i] = [];
+
+                    for (let j = 0; j < 4; j++)
+                    {
+                        actual[i][j] = matrix.elements[j * 4 + i];
+                    }
+                }
+
+                let maxError = 0;
+
+                for (let i = 0; i < 4; i++)
+                {
+                    for (let j = 0; j < 4; j++)
+                    {
+                        const error = Math.abs(
+                            actual[i][j] - expected[surface.name][i][j]
+                        );
+
+                        maxError = Math.max(maxError, error);
+                    }
+                }
+
+                const passed = maxError < tolerance;
+
+                console.log(`\n=== ${surface.name} VIEW MATRIX ===`);
+
+                console.table(actual.map((row, i) => ({
+                    Row: i,
+                    C0: row[0],
+                    C1: row[1],
+                    C2: row[2],
+                    C3: row[3]
+                })));
+
+                console.log(
+                    `${passed ? "PASS" : "FAIL"} | Maximum error: ${maxError}`
+                );
+
+                console.assert(
+                    passed,
+                    `${surface.name} view matrix differs from expected result!`
+                );
+            }
+        }
+
+        function debugProjectionMatrices()
+        {
+            const M0 = [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, -1.002, -2.002],
+                [0, 0, -1, 0]
+            ];
+
+            const depthRow = [0, 0, -1.002, -0.2002];
+            const lastRow = [0, 0, -1, 0];
+
+            // Expected results from assignment, page 4
+            const tests = [
+                {
+                    name: "TEST 1 - Centered eye",
+                    eye: new THREE.Vector3(0, 0, 0),
+                    near: 1,
+                    far: 1000,
+                    expected: {
+                        Front: { bounds: [-1, 1, -1, 1], matrix: M0 },
+                        Left:  { bounds: [-1, 1, -1, 1], matrix: M0 },
+                        Right: { bounds: [-1, 1, -1, 1], matrix: M0 },
+                        Floor: { bounds: [-1, 1, -1, 1], matrix: M0 }
+                    }
+                },
+                {
+                    name: "TEST 2 - Off-axis eye",
+                    eye: new THREE.Vector3(50, 20, 100),
+                    near: 0.1,
+                    far: 100,
+                    expected: {
+                        Front: {
+                            bounds: [-0.08, 0.04, -0.068, 0.052],
+                            matrix: [
+                                [1.66667, 0, -0.333333, 0],
+                                [0, 1.66667, -0.133333, 0],
+                                depthRow,
+                                lastRow
+                            ]
+                        },
+                        Left: {
+                            bounds: [-0.025, 0.125, -0.085, 0.065],
+                            matrix: [
+                                [1.33333, 0, 0.666667, 0],
+                                [0, 1.33333, -0.133333, 0],
+                                depthRow,
+                                lastRow
+                            ]
+                        },
+                        Right: {
+                            bounds: [-0.25, 0.05, -0.17, 0.13],
+                            matrix: [
+                                [0.666667, 0, -0.666667, 0],
+                                [0, 0.666667, -0.133333, 0],
+                                depthRow,
+                                lastRow
+                            ]
+                        }
+                    }
+                }
+            ];
+
+            const tolerance = 1e-5;
+
+            for (const test of tests)
+            {
+                console.group(test.name);
+
+                for (const surface of displaySurfaces)
+                {
+                    const expected = test.expected[surface.name];
+                    if (!expected) continue;
+
+                    // Calculate actual frustum parameters
+                    const frustum = surface.frustumParameters(
+                        test.eye, test.near
+                    );
+
+                    const actualBounds = [
+                        frustum.left,
+                        frustum.right,
+                        frustum.bottom,
+                        frustum.top
+                    ];
+
+                    const boundsError = Math.max(
+                        ...actualBounds.map((value, i) =>
+                            Math.abs(value - expected.bounds[i])
                         )
                     );
+
+                    // Calculate actual projection matrix
+                    const matrix = surface.projectionMatrix(
+                        test.eye, test.near, test.far
+                    );
+
+                    // Convert Three.js column-major storage to rows
+                    const actualMatrix = [];
+
+                    for (let row = 0; row < 4; row++)
+                    {
+                        actualMatrix[row] = [];
+
+                        for (let col = 0; col < 4; col++)
+                        {
+                            actualMatrix[row][col] =
+                                matrix.elements[col * 4 + row];
+                        }
+                    }
+
+                    let matrixError = 0;
+
+                    for (let row = 0; row < 4; row++)
+                    {
+                        for (let col = 0; col < 4; col++)
+                        {
+                            matrixError = Math.max(
+                                matrixError,
+                                Math.abs(
+                                    actualMatrix[row][col] -
+                                    expected.matrix[row][col]
+                                )
+                            );
+                        }
+                    }
+
+                    const passed =
+                        boundsError < tolerance &&
+                        matrixError < tolerance;
+
+                    console.log(`=== ${surface.name} ===`);
+
+                    console.table([{
+                        left: frustum.left,
+                        right: frustum.right,
+                        bottom: frustum.bottom,
+                        top: frustum.top,
+                        near: test.near,
+                        far: test.far
+                    }]);
+
+                    console.table(actualMatrix.map((row, i) => ({
+                        Row: i,
+                        C0: row[0],
+                        C1: row[1],
+                        C2: row[2],
+                        C3: row[3]
+                    })));
+
+                    console.log(
+                        `${passed ? "PASS" : "FAIL"} | ` +
+                        `Frustum error: ${boundsError} | ` +
+                        `Matrix error: ${matrixError}`
+                    );
+
+                    console.assert(
+                        passed,
+                        `${surface.name}: Projection test failed!`
+                    );
                 }
+
+                console.groupEnd();
+            }
+        }
+
+        function debugRenderingCameras()
+        {
+            const eye = new THREE.Vector3(50, 20, 100);
+            const znear = 0.1;
+            const zfar = 100;
+
+            const tolerance = 1e-6;
+            const results = [];
+
+            // Maximum absolute difference between two matrices
+            function matrixError(A, B)
+            {
+                let error = 0;
+
+                for (let i = 0; i < 16; i++)
+                {
+                    error = Math.max(
+                        error,
+                        Math.abs(A.elements[i] - B.elements[i])
+                    );
+                }
+
+                return error;
             }
 
-            const passed =
-                boundsError < tolerance &&
-                matrixError < tolerance;
+            for (const surface of displaySurfaces)
+            {
+                // 1. Our mathematical matrices
+                const view = surface.viewMatrix(eye);
+                const proj = surface.projectionMatrix(eye, znear, zfar);
 
-            console.log(`=== ${surface.name} ===`);
+                // 2. Create the Three.js camera
+                const cam = cameraFromViewProj(view, proj);
+                cam.updateMatrixWorld(true);
 
-            console.table([{
-                left: frustum.left,
-                right: frustum.right,
-                bottom: frustum.bottom,
-                top: frustum.top,
-                near: test.near,
-                far: test.far
-            }]);
+                // 3. Compare the matrices
+                const viewError = matrixError(
+                    cam.matrixWorldInverse, view
+                );
 
-            console.table(actualMatrix.map((row, i) => ({
-                Row: i,
-                C0: row[0],
-                C1: row[1],
-                C2: row[2],
-                C3: row[3]
-            })));
+                const projectionError = matrixError(
+                    cam.projectionMatrix, proj
+                );
 
-            console.log(
-                `${passed ? "PASS" : "FAIL"} | ` +
-                `Frustum error: ${boundsError} | ` +
-                `Matrix error: ${matrixError}`
-            );
+                // 4. Project the four screen corners
+                const combined = new THREE.Matrix4()
+                    .multiplyMatrices(
+                        cam.projectionMatrix,
+                        cam.matrixWorldInverse
+                    );
 
-            console.assert(
-                passed,
-                `${surface.name}: Projection test failed!`
-            );
+                const corners = [
+                    { point: surface.origin.clone(), expected: [-1, -1] },
+
+                    { point: surface.origin.clone().add(surface.u),
+                        expected: [1, -1] },
+
+                    { point: surface.origin.clone().add(surface.v),
+                        expected: [-1, 1] },
+
+                    { point: surface.origin.clone().add(surface.u).add(surface.v),
+                        expected: [1, 1] }
+                ];
+
+                let cornerError = 0;
+
+                for (const corner of corners)
+                {
+                    // applyMatrix4 includes the perspective division
+                    const ndc = corner.point.applyMatrix4(combined);
+
+                    cornerError = Math.max(
+                        cornerError,
+                        Math.abs(ndc.x - corner.expected[0]),
+                        Math.abs(ndc.y - corner.expected[1])
+                    );
+                }
+
+                const passed =
+                    viewError < tolerance &&
+                    projectionError < tolerance &&
+                    cornerError < tolerance;
+
+                results.push({
+                    Surface: surface.name,
+                    ViewError: viewError.toExponential(2),
+                    ProjectionError: projectionError.toExponential(2),
+                    CornerError: cornerError.toExponential(2),
+                    Result: passed ? "PASS" : "FAIL"
+                });
+            }
+
+            console.log("=== THREE.JS CAMERA TEST ===");
+            console.table(results);
         }
 
-        console.groupEnd();
-    }
-}
-
-function debugRenderingCameras()
-{
-    const eye = new THREE.Vector3(50, 20, 100);
-    const znear = 0.1;
-    const zfar = 100;
-
-    const tolerance = 1e-6;
-    const results = [];
-
-    // Maximum absolute difference between two matrices
-    function matrixError(A, B)
-    {
-        let error = 0;
-
-        for (let i = 0; i < 16; i++)
+        function debugStereoProjection()
         {
-            error = Math.max(
-                error,
-                Math.abs(A.elements[i] - B.elements[i])
+            const front = displaySurfaces.find(
+                surface => surface.name === "Front"
             );
+
+            const eyeL = getLeftEyePosition();
+            const eyeR = getRightEyePosition();
+
+            const znear = 1;
+            const zfar = 10000;
+
+            // Create left and right cameras
+            const camL = cameraFromViewProj(
+                front.viewMatrix(eyeL),
+                front.projectionMatrix(eyeL, znear, zfar)
+            );
+
+            const camR = cameraFromViewProj(
+                front.viewMatrix(eyeR),
+                front.projectionMatrix(eyeR, znear, zfar)
+            );
+
+            // Screen width, eye separation and distance
+            const width = front.u.length();
+            const IPD = eyeR.x - eyeL.x;
+            const D = eyeL.z - front.origin.z;
+
+            // Three test points at different depths
+            const teapot = scene.getObjectByName("Teapot");
+
+            const points = [
+                {
+                    name: "Teapot",
+                    position: teapot.getWorldPosition(
+                        new THREE.Vector3()
+                    )
+                },
+                {
+                    name: "On screen",
+                    position: new THREE.Vector3(0, 0, -150)
+                },
+                {
+                    name: "Behind screen",
+                    position: new THREE.Vector3(0, 0, -200)
+                }
+            ];
+
+            const results = [];
+
+            for (const point of points)
+            {
+                // Project into Normalized Device Coordinates
+                const projectedL = point.position.clone()
+                    .project(camL);
+
+                const projectedR = point.position.clone()
+                    .project(camR);
+
+                // Convert NDC horizontal difference to cm
+                const disparity = (
+                    projectedR.x - projectedL.x
+                ) * width / 2;
+
+                // Theoretical disparity
+                const Z = eyeL.z - point.position.z;
+
+                const theoretical = IPD * (1 - D / Z);
+
+                const error = Math.abs(
+                    disparity - theoretical
+                );
+
+                let parallax;
+
+                if (Math.abs(disparity) < 1e-6) {
+                    parallax = "ZERO";
+                }
+                else if (disparity < 0) {
+                    parallax = "NEGATIVE";
+                }
+                else {
+                    parallax = "POSITIVE";
+                }
+
+                results.push({
+                    Object: point.name,
+                    Z: point.position.z,
+                    LeftNDC: projectedL.x.toFixed(5),
+                    RightNDC: projectedR.x.toFixed(5),
+                    DisparityCm: disparity.toFixed(5),
+                    ExpectedCm: theoretical.toFixed(5),
+                    Parallax: parallax,
+                    Result: error < 1e-6 ? "PASS" : "FAIL"
+                });
+            }
+
+            console.log("=== STEREO PROJECTION TEST ===");
+            console.log("Left eye:", eyeL.toArray());
+            console.log("Right eye:", eyeR.toArray());
+            console.log("IPD:", IPD, "cm");
+
+            console.table(results);
         }
 
-        return error;
-    }
 
-    for (const surface of displaySurfaces)
-    {
-        // 1. Our mathematical matrices
-        const view = surface.viewMatrix(eye);
-        const proj = surface.projectionMatrix(eye, znear, zfar);
 
-        // 2. Create the Three.js camera
-        const cam = cameraFromViewProj(view, proj);
-        cam.updateMatrixWorld(true);
 
-        // 3. Compare the matrices
-        const viewError = matrixError(
-            cam.matrixWorldInverse, view
-        );
+        createRenderer();  			// create WebGL renderer
+        createDisplaySurfaces();	// Display surfaces
+        createDisplaySurfaceTargets(); // Textures for the display surfaces
+        createDisplaySurfaceScene();	// 3D objects for the display surfaces
+        configureXRSurfaceMaterials();
+        createEyeScene();	// spheres representing head + eyes
+        createScene();		// some objects to test (teapot...)
+        loadBirdModel();
+        createCamera();		// a third-person camera
+        window.addEventListener('resize', onWindowResize);
+        enableOrbitCamera(camera, renderer);  // basic camera control
+        addDragControlToObjects();	// allow some objects to be dragged
+        //animate();
+        renderer.setAnimationLoop(animate);
 
-        const projectionError = matrixError(
-            cam.projectionMatrix, proj
-        );
+        // Interactive IPD control
+        const ipdSlider = document.getElementById("ipdSlider");
+        const ipdValue = document.getElementById("ipdValue");
 
-        // 4. Project the four screen corners
-        const combined = new THREE.Matrix4()
-            .multiplyMatrices(
-                cam.projectionMatrix,
-                cam.matrixWorldInverse
-            );
-
-        const corners = [
-            { point: surface.origin.clone(), expected: [-1, -1] },
-
-            { point: surface.origin.clone().add(surface.u),
-                expected: [1, -1] },
-
-            { point: surface.origin.clone().add(surface.v),
-                expected: [-1, 1] },
-
-            { point: surface.origin.clone().add(surface.u).add(surface.v),
-                expected: [1, 1] }
-        ];
-
-        let cornerError = 0;
-
-        for (const corner of corners)
+        ipdSlider.addEventListener("input", function()
         {
-            // applyMatrix4 includes the perspective division
-            const ndc = corner.point.applyMatrix4(combined);
+            const IPD = parseFloat(ipdSlider.value);
 
-            cornerError = Math.max(
-                cornerError,
-                Math.abs(ndc.x - corner.expected[0]),
-                Math.abs(ndc.y - corner.expected[1])
-            );
-        }
+            // Get the head and both eyes
+            const head = eyeScene.getObjectByName("Head");
+            const eyeL = head.getObjectByName("EyeL");
+            const eyeR = head.getObjectByName("EyeR");
 
-        const passed =
-            viewError < tolerance &&
-            projectionError < tolerance &&
-            cornerError < tolerance;
+            // Symmetric separation around the head center
+            eyeL.position.x = -IPD / 2;
+            eyeR.position.x = +IPD / 2;
 
-        results.push({
-            Surface: surface.name,
-            ViewError: viewError.toExponential(2),
-            ProjectionError: projectionError.toExponential(2),
-            CornerError: cornerError.toExponential(2),
-            Result: passed ? "PASS" : "FAIL"
+            // Update the displayed value
+            ipdValue.textContent = IPD.toFixed(1);
         });
-    }
 
-    console.log("=== THREE.JS CAMERA TEST ===");
-    console.table(results);
-}
+        // Interactive scene scaling
+        const scaleSlider = document.getElementById("scaleSlider");
+        const scaleValue = document.getElementById("scaleValue");
 
-function debugStereoProjection()
-{
-    const front = displaySurfaces.find(
-        surface => surface.name === "Front"
-    );
-
-    const eyeL = getLeftEyePosition();
-    const eyeR = getRightEyePosition();
-
-    const znear = 1;
-    const zfar = 10000;
-
-    // Create left and right cameras
-    const camL = cameraFromViewProj(
-        front.viewMatrix(eyeL),
-        front.projectionMatrix(eyeL, znear, zfar)
-    );
-
-    const camR = cameraFromViewProj(
-        front.viewMatrix(eyeR),
-        front.projectionMatrix(eyeR, znear, zfar)
-    );
-
-    // Screen width, eye separation and distance
-    const width = front.u.length();
-    const IPD = eyeR.x - eyeL.x;
-    const D = eyeL.z - front.origin.z;
-
-    // Three test points at different depths
-    const teapot = scene.getObjectByName("Teapot");
-
-    const points = [
+        scaleSlider.addEventListener("input", function()
         {
-            name: "Teapot",
-            position: teapot.getWorldPosition(
-                new THREE.Vector3()
-            )
-        },
-        {
-            name: "On screen",
-            position: new THREE.Vector3(0, 0, -150)
-        },
-        {
-            name: "Behind screen",
-            position: new THREE.Vector3(0, 0, -200)
-        }
-    ];
+            const scale = parseFloat(scaleSlider.value);
 
-    const results = [];
+            // Uniform scaling of the 3D scene
+            scene.scale.setScalar(scale);
 
-    for (const point of points)
-    {
-        // Project into Normalized Device Coordinates
-        const projectedL = point.position.clone()
-            .project(camL);
-
-        const projectedR = point.position.clone()
-            .project(camR);
-
-        // Convert NDC horizontal difference to cm
-        const disparity = (
-            projectedR.x - projectedL.x
-        ) * width / 2;
-
-        // Theoretical disparity
-        const Z = eyeL.z - point.position.z;
-
-        const theoretical = IPD * (1 - D / Z);
-
-        const error = Math.abs(
-            disparity - theoretical
-        );
-
-        let parallax;
-
-        if (Math.abs(disparity) < 1e-6) {
-            parallax = "ZERO";
-        }
-        else if (disparity < 0) {
-            parallax = "NEGATIVE";
-        }
-        else {
-            parallax = "POSITIVE";
-        }
-
-        results.push({
-            Object: point.name,
-            Z: point.position.z,
-            LeftNDC: projectedL.x.toFixed(5),
-            RightNDC: projectedR.x.toFixed(5),
-            DisparityCm: disparity.toFixed(5),
-            ExpectedCm: theoretical.toFixed(5),
-            Parallax: parallax,
-            Result: error < 1e-6 ? "PASS" : "FAIL"
+            // Update displayed value
+            scaleValue.textContent = scale.toFixed(2);
         });
-    }
 
-    console.log("=== STEREO PROJECTION TEST ===");
-    console.log("Left eye:", eyeL.toArray());
-    console.log("Right eye:", eyeR.toArray());
-    console.log("IPD:", IPD, "cm");
+        // Interactive scene translation
+        const sceneX = document.getElementById("sceneX");
+        const sceneY = document.getElementById("sceneY");
+        const sceneZ = document.getElementById("sceneZ");
 
-    console.table(results);
-}
+        function updateScenePosition()
+        {
+            const x = parseFloat(sceneX.value);
+            const y = parseFloat(sceneY.value);
+            const z = parseFloat(sceneZ.value);
 
+            // Translate the entire 3D scene
+            scene.position.set(x, y, z);
 
+            // Update displayed values
+            document.getElementById("valueX").textContent = x;
+            document.getElementById("valueY").textContent = y;
+            document.getElementById("valueZ").textContent = z;
+        }
 
-
-createRenderer();  			// create WebGL renderer
-createDisplaySurfaces();	// Display surfaces
-createDisplaySurfaceTargets(); // Textures for the display surfaces
-createDisplaySurfaceScene();	// 3D objects for the display surfaces
-configureXRSurfaceMaterials();
-createEyeScene();	// spheres representing head + eyes
-createScene();		// some objects to test (teapot...)
-loadBirdModel();
-createCamera();		// a third-person camera
-window.addEventListener('resize', onWindowResize);
-enableOrbitCamera(camera, renderer);  // basic camera control
-addDragControlToObjects();	// allow some objects to be dragged
-//animate();
-renderer.setAnimationLoop(animate);
-
-// Interactive IPD control
-const ipdSlider = document.getElementById("ipdSlider");
-const ipdValue = document.getElementById("ipdValue");
-
-ipdSlider.addEventListener("input", function()
-{
-    const IPD = parseFloat(ipdSlider.value);
-
-    // Get the head and both eyes
-    const head = eyeScene.getObjectByName("Head");
-    const eyeL = head.getObjectByName("EyeL");
-    const eyeR = head.getObjectByName("EyeR");
-
-    // Symmetric separation around the head center
-    eyeL.position.x = -IPD / 2;
-    eyeR.position.x = +IPD / 2;
-
-    // Update the displayed value
-    ipdValue.textContent = IPD.toFixed(1);
-});
-
-// Interactive scene scaling
-const scaleSlider = document.getElementById("scaleSlider");
-const scaleValue = document.getElementById("scaleValue");
-
-scaleSlider.addEventListener("input", function()
-{
-    const scale = parseFloat(scaleSlider.value);
-
-    // Uniform scaling of the 3D scene
-    scene.scale.setScalar(scale);
-
-    // Update displayed value
-    scaleValue.textContent = scale.toFixed(2);
-});
-
-// Interactive scene translation
-const sceneX = document.getElementById("sceneX");
-const sceneY = document.getElementById("sceneY");
-const sceneZ = document.getElementById("sceneZ");
-
-function updateScenePosition()
-{
-    const x = parseFloat(sceneX.value);
-    const y = parseFloat(sceneY.value);
-    const z = parseFloat(sceneZ.value);
-
-    // Translate the entire 3D scene
-    scene.position.set(x, y, z);
-
-    // Update displayed values
-    document.getElementById("valueX").textContent = x;
-    document.getElementById("valueY").textContent = y;
-    document.getElementById("valueZ").textContent = z;
-}
-
-sceneX.addEventListener("input", updateScenePosition);
-sceneY.addEventListener("input", updateScenePosition);
-sceneZ.addEventListener("input", updateScenePosition);
-
-
-		</script>
-    </body>
+        sceneX.addEventListener("input", updateScenePosition);
+        sceneY.addEventListener("input", updateScenePosition);
+        sceneZ.addEventListener("input", updateScenePosition);
+    </script>
+</body>
 </html>
